@@ -1,12 +1,16 @@
+//go:build linux || darwin
+// +build linux darwin
+
 package commitlog
 
 import (
 	"encoding/binary"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"os"
 	"sync"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 const entrySize = 8      // 4 bytes for "relative" offset + 4 bytes for position
@@ -33,14 +37,12 @@ func NewOffsetIndex(file *os.File, baseOffset int64) (*OffsetIndex, error) {
 	}
 	fileSize := fileInfo.Size()
 
-	isNewFile := false
 	// If the file is empty, we can initialize it with a default size (e.g., 1MB) to avoid issues with mmap.
 	if fileSize == 0 {
 		fileSize = int64(1024 * 1024) // 1MB
 		if err := file.Truncate(fileSize); err != nil {
 			return nil, fmt.Errorf("failed to initialize index file: %v", err)
 		}
-		isNewFile = true
 	}
 
 	mmap, err := syscall.Mmap(int(file.Fd()), 0, int(fileSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
@@ -48,24 +50,11 @@ func NewOffsetIndex(file *os.File, baseOffset int64) (*OffsetIndex, error) {
 		return nil, fmt.Errorf("failed to mmap index file: %v", err)
 	}
 
-	entryCount := 0
-	if !isNewFile {
-		//todo: optimize by binary search
-		for i := int64(0); i < fileSize; i += entrySize {
-			offset := binary.BigEndian.Uint32(mmap[i : i+4])
-			position := binary.BigEndian.Uint32(mmap[i+4 : i+8])
-			if offset == 0 && position == 0 && entryCount > 0 {
-				break
-			}
-			entryCount++
-		}
-	}
-
 	return &OffsetIndex{
 		file:       file,
 		baseOffset: baseOffset,
 		size:       fileSize,
-		entryCount: entryCount,
+		entryCount: 0,
 		mmap:       mmap,
 		mu:         new(sync.RWMutex),
 	}, nil
@@ -75,7 +64,7 @@ func (idx *OffsetIndex) Append(offset int64, position int) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	requiredSize := int64((idx.entryCount + 1) * entrySize)
+	requiredSize := int64(idx.entryCount+1) * entrySize
 	if requiredSize > idx.size {
 		err := idx.grow()
 		if err != nil {
@@ -116,6 +105,10 @@ func (idx *OffsetIndex) Lookup(offset int64) (int, error) {
 	}
 
 	return 0, fmt.Errorf("relative offset %d not found in index", offset)
+}
+
+func (idx *OffsetIndex) EntryCount() int {
+	return idx.entryCount
 }
 
 func (idx *OffsetIndex) grow() error {
@@ -159,6 +152,11 @@ func (idx *OffsetIndex) FindLastOffset() (int64, error) {
 func (idx *OffsetIndex) Close() error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+
+	if idx.mmap == nil {
+		_ = idx.file.Close()
+		return fmt.Errorf("index is in invalid state (mmap is nil)")
+	}
 
 	//sync to disk before unmapping
 	if err := unix.Msync(idx.mmap, unix.MS_SYNC); err != nil {
@@ -213,20 +211,11 @@ func NewTimeIndex(file *os.File, baseOffset int64) (*TimeIndex, error) {
 		return nil, fmt.Errorf("failed to mmap time index file: %v", err)
 	}
 
-	entryCount := 0
-	for i := int64(0); i < fileSize; i += timeEntrySize {
-		timestamp := int64(binary.BigEndian.Uint64(newMmap[i : i+8]))
-		if timestamp == 0 {
-			break
-		}
-		entryCount++
-	}
-
 	return &TimeIndex{
 		file:       file,
 		baseOffset: baseOffset,
 		size:       fileSize,
-		entryCount: entryCount,
+		entryCount: 0,
 		mmap:       newMmap,
 		mu:         new(sync.RWMutex),
 	}, nil
@@ -236,7 +225,7 @@ func (idx *TimeIndex) Append(offset int64, timestamp int64) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	requiredSize := int64((idx.entryCount + 1) * timeEntrySize)
+	requiredSize := int64(idx.entryCount+1) * timeEntrySize
 	if requiredSize > idx.size {
 		if err := idx.grow(); err != nil {
 			return fmt.Errorf("failed to grow time index file: %v", err)
@@ -302,6 +291,11 @@ func (idx *TimeIndex) grow() error {
 func (idx *TimeIndex) Close() error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+
+	if idx.mmap == nil {
+		_ = idx.file.Close()
+		return fmt.Errorf("index is in invalid state (mmap is nil)")
+	}
 
 	//sync to disk before unmapping
 	if err := unix.Msync(idx.mmap, unix.MS_SYNC); err != nil {

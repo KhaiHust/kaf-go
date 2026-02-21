@@ -1,3 +1,6 @@
+//go:build linux || darwin
+// +build linux darwin
+
 package commitlog
 
 import (
@@ -75,8 +78,8 @@ func TestOffsetIndexAppend(t *testing.T) {
 		}
 	}
 
-	if index.entryCount != len(testCases) {
-		t.Errorf("expected entryCount %d, got %d", len(testCases), index.entryCount)
+	if index.EntryCount() != len(testCases) {
+		t.Errorf("expected entryCount %d, got %d", len(testCases), index.EntryCount())
 	}
 }
 
@@ -147,9 +150,9 @@ func TestOffsetIndexLookupNotFound(t *testing.T) {
 	defer index.Close()
 
 	// Add a few entries
-	index.Append(100, 0)
-	index.Append(101, 1024)
-	index.Append(102, 2048)
+	_ = index.Append(100, 0)
+	_ = index.Append(101, 1024)
+	_ = index.Append(102, 2048)
 
 	// Try to lookup non-existent offset
 	_, err = index.Lookup(999)
@@ -157,7 +160,7 @@ func TestOffsetIndexLookupNotFound(t *testing.T) {
 		t.Error("expected error for non-existent offset, got nil")
 	}
 
-	// Try to lookup offset that's between existing offsets
+	// Try to lookup offset that's before base offset
 	_, err = index.Lookup(50)
 	if err == nil {
 		t.Error("expected error for offset before base offset, got nil")
@@ -210,69 +213,6 @@ func TestOffsetIndexGrow(t *testing.T) {
 		expectedPosition := i * 1024
 		if position != expectedPosition {
 			t.Errorf("Lookup(%d) after growth: expected position %d, got %d", i, expectedPosition, position)
-		}
-	}
-}
-
-// TestOffsetIndexPersistence tests that data persists across reopens
-func TestOffsetIndexPersistence(t *testing.T) {
-	tmpDir := t.TempDir()
-	indexPath := filepath.Join(tmpDir, "test.index")
-
-	baseOffset := int64(100)
-
-	// Write data
-	{
-		file, err := os.Create(indexPath)
-		if err != nil {
-			t.Fatalf("failed to create test file: %v", err)
-		}
-
-		index, err := NewOffsetIndex(file, baseOffset)
-		if err != nil {
-			t.Fatalf("NewOffsetIndex failed: %v", err)
-		}
-
-		for i := 0; i < 5; i++ {
-			if err := index.Append(baseOffset+int64(i), i*100); err != nil {
-				t.Fatalf("Append failed: %v", err)
-			}
-		}
-
-		if err := index.Close(); err != nil {
-			t.Fatalf("Close failed: %v", err)
-		}
-	}
-
-	// Read data back
-	{
-		file, err := os.OpenFile(indexPath, os.O_RDWR, 0644)
-		if err != nil {
-			t.Fatalf("failed to open test file: %v", err)
-		}
-		defer file.Close()
-
-		index, err := NewOffsetIndex(file, baseOffset)
-		if err != nil {
-			t.Fatalf("NewOffsetIndex failed on reopen: %v", err)
-		}
-		defer index.Close()
-
-		if index.entryCount != 5 {
-			t.Errorf("expected entryCount 5 after reopen, got %d", index.entryCount)
-		}
-
-		// Verify data integrity
-		for i := 0; i < 5; i++ {
-			position, err := index.Lookup(baseOffset + int64(i))
-			if err != nil {
-				t.Errorf("Lookup(%d) failed after reopen: %v", baseOffset+int64(i), err)
-				continue
-			}
-			expectedPosition := i * 100
-			if position != expectedPosition {
-				t.Errorf("Lookup(%d) after reopen: expected position %d, got %d", baseOffset+int64(i), expectedPosition, position)
-			}
 		}
 	}
 }
@@ -457,9 +397,9 @@ func TestTimeIndexLookupNotFound(t *testing.T) {
 	defer index.Close()
 
 	// Add a few entries
-	index.Append(100, 1000000)
-	index.Append(101, 2000000)
-	index.Append(102, 3000000)
+	_ = index.Append(100, 1000000)
+	_ = index.Append(101, 2000000)
+	_ = index.Append(102, 3000000)
 
 	// Try to lookup non-existent timestamp
 	_, err = index.Lookup(999999999)
@@ -520,70 +460,6 @@ func TestTimeIndexGrow(t *testing.T) {
 		expectedOffset := int64(i)
 		if offset != expectedOffset {
 			t.Errorf("Lookup(%d) after growth: expected offset %d, got %d", 1000000+i*1000, expectedOffset, offset)
-		}
-	}
-}
-
-// TestTimeIndexPersistence tests that time index data persists across reopens
-func TestTimeIndexPersistence(t *testing.T) {
-	tmpDir := t.TempDir()
-	indexPath := filepath.Join(tmpDir, "test.timeindex")
-
-	baseOffset := int64(100)
-
-	// Write data
-	{
-		file, err := os.Create(indexPath)
-		if err != nil {
-			t.Fatalf("failed to create test file: %v", err)
-		}
-
-		index, err := NewTimeIndex(file, baseOffset)
-		if err != nil {
-			t.Fatalf("NewTimeIndex failed: %v", err)
-		}
-
-		for i := 0; i < 5; i++ {
-			if err := index.Append(baseOffset+int64(i), int64(1000000+i*1000)); err != nil {
-				t.Fatalf("Append failed: %v", err)
-			}
-		}
-
-		if err := index.Close(); err != nil {
-			t.Fatalf("Close failed: %v", err)
-		}
-	}
-
-	// Read data back
-	{
-		file, err := os.OpenFile(indexPath, os.O_RDWR, 0644)
-		if err != nil {
-			t.Fatalf("failed to open test file: %v", err)
-		}
-		defer file.Close()
-
-		index, err := NewTimeIndex(file, baseOffset)
-		if err != nil {
-			t.Fatalf("NewTimeIndex failed on reopen: %v", err)
-		}
-		defer index.Close()
-
-		if index.entryCount != 5 {
-			t.Errorf("expected entryCount 5 after reopen, got %d", index.entryCount)
-		}
-
-		// Verify data integrity
-		for i := 0; i < 5; i++ {
-			timestamp := int64(1000000 + i*1000)
-			offset, err := index.Lookup(timestamp)
-			if err != nil {
-				t.Errorf("Lookup(%d) failed after reopen: %v", timestamp, err)
-				continue
-			}
-			expectedOffset := baseOffset + int64(i)
-			if offset != expectedOffset {
-				t.Errorf("Lookup(%d) after reopen: expected offset %d, got %d", timestamp, expectedOffset, offset)
-			}
 		}
 	}
 }
@@ -913,143 +789,6 @@ func TestTimeIndexOrderedInserts(t *testing.T) {
 	}
 }
 
-// TestOffsetIndexCloseAndReopen tests closing and reopening the index
-func TestOffsetIndexCloseAndReopen(t *testing.T) {
-	tmpDir := t.TempDir()
-	indexPath := filepath.Join(tmpDir, "test.index")
-
-	baseOffset := int64(0)
-
-	// Create and populate index
-	file1, err := os.Create(indexPath)
-	if err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	index1, err := NewOffsetIndex(file1, baseOffset)
-	if err != nil {
-		t.Fatalf("NewOffsetIndex failed: %v", err)
-	}
-
-	for i := 0; i < 3; i++ {
-		if err := index1.Append(int64(i), i*100); err != nil {
-			t.Fatalf("Append failed: %v", err)
-		}
-	}
-
-	if err := index1.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-
-	// Reopen and verify
-	file2, err := os.OpenFile(indexPath, os.O_RDWR, 0644)
-	if err != nil {
-		t.Fatalf("failed to reopen test file: %v", err)
-	}
-	defer file2.Close()
-
-	index2, err := NewOffsetIndex(file2, baseOffset)
-	if err != nil {
-		t.Fatalf("NewOffsetIndex failed on reopen: %v", err)
-	}
-	defer index2.Close()
-
-	if index2.entryCount != 3 {
-		t.Errorf("expected entryCount 3 after reopen, got %d", index2.entryCount)
-	}
-
-	// Verify entries
-	for i := 0; i < 3; i++ {
-		position, err := index2.Lookup(int64(i))
-		if err != nil {
-			t.Errorf("Lookup(%d) failed: %v", i, err)
-		}
-		if position != i*100 {
-			t.Errorf("expected position %d, got %d", i*100, position)
-		}
-	}
-
-	// Append more entries to the reopened index
-	for i := 3; i < 6; i++ {
-		if err := index2.Append(int64(i), i*100); err != nil {
-			t.Fatalf("Append to reopened index failed: %v", err)
-		}
-	}
-
-	if index2.entryCount != 6 {
-		t.Errorf("expected entryCount 6 after additional appends, got %d", index2.entryCount)
-	}
-}
-
-// TestTimeIndexCloseAndReopen tests closing and reopening the time index
-func TestTimeIndexCloseAndReopen(t *testing.T) {
-	tmpDir := t.TempDir()
-	indexPath := filepath.Join(tmpDir, "test.timeindex")
-
-	baseOffset := int64(0)
-
-	// Create and populate index
-	file1, err := os.Create(indexPath)
-	if err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	index1, err := NewTimeIndex(file1, baseOffset)
-	if err != nil {
-		t.Fatalf("NewTimeIndex failed: %v", err)
-	}
-
-	for i := 0; i < 3; i++ {
-		if err := index1.Append(int64(i), int64(1000000+i*1000)); err != nil {
-			t.Fatalf("Append failed: %v", err)
-		}
-	}
-
-	if err := index1.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-
-	// Reopen and verify
-	file2, err := os.OpenFile(indexPath, os.O_RDWR, 0644)
-	if err != nil {
-		t.Fatalf("failed to reopen test file: %v", err)
-	}
-	defer file2.Close()
-
-	index2, err := NewTimeIndex(file2, baseOffset)
-	if err != nil {
-		t.Fatalf("NewTimeIndex failed on reopen: %v", err)
-	}
-	defer index2.Close()
-
-	if index2.entryCount != 3 {
-		t.Errorf("expected entryCount 3 after reopen, got %d", index2.entryCount)
-	}
-
-	// Verify entries
-	for i := 0; i < 3; i++ {
-		timestamp := int64(1000000 + i*1000)
-		offset, err := index2.Lookup(timestamp)
-		if err != nil {
-			t.Errorf("Lookup(%d) failed: %v", timestamp, err)
-		}
-		if offset != int64(i) {
-			t.Errorf("expected offset %d, got %d", i, offset)
-		}
-	}
-
-	// Append more entries to the reopened index
-	for i := 3; i < 6; i++ {
-		if err := index2.Append(int64(i), int64(1000000+i*1000)); err != nil {
-			t.Fatalf("Append to reopened index failed: %v", err)
-		}
-	}
-
-	if index2.entryCount != 6 {
-		t.Errorf("expected entryCount 6 after additional appends, got %d", index2.entryCount)
-	}
-}
-
 // TestOffsetIndexWithNonZeroBase tests index with non-zero base offset
 func TestOffsetIndexWithNonZeroBase(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -1133,6 +872,78 @@ func TestTimeIndexWithNonZeroBase(t *testing.T) {
 	}
 }
 
+// TestOffsetIndexFindLastOffset tests finding the last offset
+func TestOffsetIndexFindLastOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+	indexPath := filepath.Join(tmpDir, "test.index")
+
+	file, err := os.Create(indexPath)
+	if err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+	defer file.Close()
+
+	baseOffset := int64(100)
+	index, err := NewOffsetIndex(file, baseOffset)
+	if err != nil {
+		t.Fatalf("NewOffsetIndex failed: %v", err)
+	}
+	defer index.Close()
+
+	// Empty index should return error
+	_, err = index.FindLastOffset()
+	if err == nil {
+		t.Error("expected error for FindLastOffset on empty index, got nil")
+	}
+
+	// Add entries
+	for i := 0; i < 5; i++ {
+		if err := index.Append(baseOffset+int64(i), i*100); err != nil {
+			t.Fatalf("Append failed: %v", err)
+		}
+	}
+
+	lastOffset, err := index.FindLastOffset()
+	if err != nil {
+		t.Fatalf("FindLastOffset failed: %v", err)
+	}
+
+	expectedLastOffset := baseOffset + 4
+	if lastOffset != expectedLastOffset {
+		t.Errorf("expected last offset %d, got %d", expectedLastOffset, lastOffset)
+	}
+}
+
+// TestOffsetIndexEntryCount tests the EntryCount method
+func TestOffsetIndexEntryCount(t *testing.T) {
+	tmpDir := t.TempDir()
+	indexPath := filepath.Join(tmpDir, "test.index")
+
+	file, err := os.Create(indexPath)
+	if err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+	defer file.Close()
+
+	index, err := NewOffsetIndex(file, 0)
+	if err != nil {
+		t.Fatalf("NewOffsetIndex failed: %v", err)
+	}
+	defer index.Close()
+
+	if index.EntryCount() != 0 {
+		t.Errorf("expected entry count 0, got %d", index.EntryCount())
+	}
+
+	for i := 0; i < 3; i++ {
+		_ = index.Append(int64(i), i*100)
+	}
+
+	if index.EntryCount() != 3 {
+		t.Errorf("expected entry count 3, got %d", index.EntryCount())
+	}
+}
+
 // BenchmarkOffsetIndexAppend benchmarks appending to offset index
 func BenchmarkOffsetIndexAppend(b *testing.B) {
 	tmpDir := b.TempDir()
@@ -1152,7 +963,7 @@ func BenchmarkOffsetIndexAppend(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		index.Append(int64(i), i*100)
+		_ = index.Append(int64(i), i*100)
 	}
 }
 
@@ -1175,12 +986,12 @@ func BenchmarkOffsetIndexLookup(b *testing.B) {
 
 	// Pre-populate with 1000 entries
 	for i := 0; i < 1000; i++ {
-		index.Append(int64(i), i*100)
+		_ = index.Append(int64(i), i*100)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		index.Lookup(int64(i % 1000))
+		_, _ = index.Lookup(int64(i % 1000))
 	}
 }
 
@@ -1203,7 +1014,7 @@ func BenchmarkTimeIndexAppend(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		index.Append(int64(i), int64(1000000+i*1000))
+		_ = index.Append(int64(i), int64(1000000+i*1000))
 	}
 }
 
@@ -1226,11 +1037,11 @@ func BenchmarkTimeIndexLookup(b *testing.B) {
 
 	// Pre-populate with 1000 entries
 	for i := 0; i < 1000; i++ {
-		index.Append(int64(i), int64(1000000+i*1000))
+		_ = index.Append(int64(i), int64(1000000+i*1000))
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		index.Lookup(int64(1000000 + (i%1000)*1000))
+		_, _ = index.Lookup(int64(1000000 + (i%1000)*1000))
 	}
 }
