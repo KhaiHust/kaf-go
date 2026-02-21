@@ -1,13 +1,12 @@
 package commitlog
 
 import (
+	"encoding/binary"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"sync"
 	"syscall"
-	"unsafe"
-
-	"github.com/KhaiHust/kaf-go/common"
 )
 
 const entrySize = 8      // 4 bytes for "relative" offset + 4 bytes for position
@@ -34,12 +33,14 @@ func NewOffsetIndex(file *os.File, baseOffset int64) (*OffsetIndex, error) {
 	}
 	fileSize := fileInfo.Size()
 
+	isNewFile := false
 	// If the file is empty, we can initialize it with a default size (e.g., 1MB) to avoid issues with mmap.
 	if fileSize == 0 {
 		fileSize = int64(1024 * 1024) // 1MB
 		if err := file.Truncate(fileSize); err != nil {
 			return nil, fmt.Errorf("failed to initialize index file: %v", err)
 		}
+		isNewFile = true
 	}
 
 	mmap, err := syscall.Mmap(int(file.Fd()), 0, int(fileSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
@@ -48,31 +49,16 @@ func NewOffsetIndex(file *os.File, baseOffset int64) (*OffsetIndex, error) {
 	}
 
 	entryCount := 0
-	for i := int64(0); i < fileSize; i += entrySize {
-		offset := common.BigEndianEncode.Uint32(mmap[i : i+4])
-		position := common.BigEndianEncode.Uint32(mmap[i+4 : i+8])
-		// Both offset and position being 0 indicates an empty slot
-		// (first entry with baseOffset=0 has relativeOffset=0 but position=0 is valid)
-		if offset == 0 && position == 0 && entryCount > 0 {
-			break
-		}
-		// If we're at the start and both are 0, check the next entry to see if it's truly empty
-		if offset == 0 && position == 0 && entryCount == 0 {
-			// Check if file was empty/newly created by looking at next entry
-			if i+entrySize < fileSize {
-				nextOffset := common.BigEndianEncode.Uint32(mmap[i+entrySize : i+entrySize+4])
-				nextPosition := common.BigEndianEncode.Uint32(mmap[i+entrySize+4 : i+entrySize+8])
-				if nextOffset == 0 && nextPosition == 0 {
-					// Both first and second entries are zeros - file is empty
-					break
-				}
-			} else {
-				// Only one slot and it's all zeros - file is empty
+	if !isNewFile {
+		//todo: optimize by binary search
+		for i := int64(0); i < fileSize; i += entrySize {
+			offset := binary.BigEndian.Uint32(mmap[i : i+4])
+			position := binary.BigEndian.Uint32(mmap[i+4 : i+8])
+			if offset == 0 && position == 0 && entryCount > 0 {
 				break
 			}
+			entryCount++
 		}
-		entryCount++
-
 	}
 
 	return &OffsetIndex{
@@ -97,10 +83,10 @@ func (idx *OffsetIndex) Append(offset int64, position int) error {
 		}
 	}
 
-	relativeOffset := offset - idx.baseOffset
+	relativeOffset := int32(offset - idx.baseOffset)
 	entryPosition := int64(idx.entryCount * entrySize)
-	common.BigEndianEncode.PutUint32(idx.mmap[entryPosition:entryPosition+4], uint32(relativeOffset))
-	common.BigEndianEncode.PutUint32(idx.mmap[entryPosition+4:entryPosition+8], uint32(position))
+	binary.BigEndian.PutUint32(idx.mmap[entryPosition:entryPosition+4], uint32(relativeOffset))
+	binary.BigEndian.PutUint32(idx.mmap[entryPosition+4:entryPosition+8], uint32(position))
 	idx.entryCount++
 
 	return nil
@@ -117,9 +103,9 @@ func (idx *OffsetIndex) Lookup(offset int64) (int, error) {
 		mid := left + (right-left)/2
 
 		entryPosition := int64(mid * entrySize)
-		entryRelativeOffset := int(common.BigEndianEncode.Uint32(idx.mmap[entryPosition : entryPosition+4]))
+		entryRelativeOffset := int(binary.BigEndian.Uint32(idx.mmap[entryPosition : entryPosition+4]))
 		if entryRelativeOffset == relativeOffset {
-			result = int(common.BigEndianEncode.Uint32(idx.mmap[entryPosition+4 : entryPosition+8]))
+			result = int(binary.BigEndian.Uint32(idx.mmap[entryPosition+4 : entryPosition+8]))
 			return result, nil
 		}
 		if entryRelativeOffset < relativeOffset {
@@ -143,6 +129,8 @@ func (idx *OffsetIndex) grow() error {
 		return fmt.Errorf("failed to unmap old index file: %v", err)
 	}
 
+	// important: handle global error
+	idx.mmap = nil
 	// Create a new mmap with the updated size
 	newMmap, err := syscall.Mmap(int(idx.file.Fd()), 0, int(newSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
@@ -164,7 +152,7 @@ func (idx *OffsetIndex) FindLastOffset() (int64, error) {
 	}
 
 	lastEntryPosition := int64((idx.entryCount - 1) * entrySize)
-	relativeOffset := int64(common.BigEndianEncode.Uint32(idx.mmap[lastEntryPosition : lastEntryPosition+4]))
+	relativeOffset := int64(binary.BigEndian.Uint32(idx.mmap[lastEntryPosition : lastEntryPosition+4]))
 	return idx.baseOffset + relativeOffset, nil
 }
 
@@ -173,7 +161,7 @@ func (idx *OffsetIndex) Close() error {
 	defer idx.mu.Unlock()
 
 	//sync to disk before unmapping
-	if _, _, err := syscall.Syscall(syscall.SYS_MSYNC, uintptr(unsafe.Pointer(&idx.mmap[0])), uintptr(len(idx.mmap)), uintptr(syscall.MS_SYNC)); err != 0 {
+	if err := unix.Msync(idx.mmap, unix.MS_SYNC); err != nil {
 		return fmt.Errorf("failed to sync index file: %v", err)
 	}
 
@@ -227,7 +215,7 @@ func NewTimeIndex(file *os.File, baseOffset int64) (*TimeIndex, error) {
 
 	entryCount := 0
 	for i := int64(0); i < fileSize; i += timeEntrySize {
-		timestamp := int64(common.BigEndianEncode.Uint64(newMmap[i : i+8]))
+		timestamp := int64(binary.BigEndian.Uint64(newMmap[i : i+8]))
 		if timestamp == 0 {
 			break
 		}
@@ -256,8 +244,8 @@ func (idx *TimeIndex) Append(offset int64, timestamp int64) error {
 	}
 
 	entryPosition := int64(idx.entryCount * timeEntrySize)
-	common.BigEndianEncode.PutUint64(idx.mmap[entryPosition:], uint64(timestamp))
-	common.BigEndianEncode.PutUint32(idx.mmap[entryPosition+8:], uint32(offset-idx.baseOffset))
+	binary.BigEndian.PutUint64(idx.mmap[entryPosition:], uint64(timestamp))
+	binary.BigEndian.PutUint32(idx.mmap[entryPosition+8:], uint32(offset-idx.baseOffset))
 	idx.entryCount++
 
 	return nil
@@ -273,9 +261,9 @@ func (idx *TimeIndex) Lookup(timestamp int64) (int64, error) {
 		mid := left + (right-left)/2
 
 		entryPosition := int64(mid * timeEntrySize)
-		entryTimestamp := int64(common.BigEndianEncode.Uint64(idx.mmap[entryPosition : entryPosition+8]))
+		entryTimestamp := int64(binary.BigEndian.Uint64(idx.mmap[entryPosition : entryPosition+8]))
 		if entryTimestamp == timestamp {
-			result = int(common.BigEndianEncode.Uint32(idx.mmap[entryPosition+8 : entryPosition+12]))
+			result = int(binary.BigEndian.Uint32(idx.mmap[entryPosition+8 : entryPosition+12]))
 			return idx.baseOffset + int64(result), nil
 		}
 		if entryTimestamp < timestamp {
@@ -298,6 +286,8 @@ func (idx *TimeIndex) grow() error {
 		return fmt.Errorf("failed to unmap old time index file: %v", err)
 	}
 
+	// important: handle global error
+	idx.mmap = nil
 	// Create a new mmap with the updated size
 	newMmap, err := syscall.Mmap(int(idx.file.Fd()), 0, int(newSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
@@ -314,10 +304,9 @@ func (idx *TimeIndex) Close() error {
 	defer idx.mu.Unlock()
 
 	//sync to disk before unmapping
-	if _, _, err := syscall.Syscall(syscall.SYS_MSYNC, uintptr(unsafe.Pointer(&idx.mmap[0])), uintptr(len(idx.mmap)), uintptr(syscall.MS_SYNC)); err != 0 {
+	if err := unix.Msync(idx.mmap, unix.MS_SYNC); err != nil {
 		return fmt.Errorf("failed to sync time index file: %v", err)
 	}
-
 	// Unmap the memory-mapped file
 	if err := syscall.Munmap(idx.mmap); err != nil {
 		return fmt.Errorf("failed to unmap time index file: %v", err)
