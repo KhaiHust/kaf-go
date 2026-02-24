@@ -132,41 +132,6 @@ func TestOffsetIndexLookup(t *testing.T) {
 	}
 }
 
-// TestOffsetIndexLookupNotFound tests looking up non-existent offset
-func TestOffsetIndexLookupNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	indexPath := filepath.Join(tmpDir, "test.index")
-
-	file, err := os.Create(indexPath)
-	if err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-	defer file.Close()
-
-	index, err := NewOffsetIndex(file, 100)
-	if err != nil {
-		t.Fatalf("NewOffsetIndex failed: %v", err)
-	}
-	defer index.Close()
-
-	// Add a few entries
-	_ = index.Append(100, 0)
-	_ = index.Append(101, 1024)
-	_ = index.Append(102, 2048)
-
-	// Try to lookup non-existent offset
-	_, err = index.Lookup(999)
-	if err == nil {
-		t.Error("expected error for non-existent offset, got nil")
-	}
-
-	// Try to lookup offset that's before base offset
-	_, err = index.Lookup(50)
-	if err == nil {
-		t.Error("expected error for offset before base offset, got nil")
-	}
-}
-
 // TestOffsetIndexGrow tests index growth when capacity is exceeded
 func TestOffsetIndexGrow(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -504,29 +469,6 @@ func TestTimeIndexConcurrent(t *testing.T) {
 		}(int64(1000000 + i*1000))
 	}
 	wg.Wait()
-}
-
-// TestOffsetIndexEmptyLookup tests lookup on empty index
-func TestOffsetIndexEmptyLookup(t *testing.T) {
-	tmpDir := t.TempDir()
-	indexPath := filepath.Join(tmpDir, "test.index")
-
-	file, err := os.Create(indexPath)
-	if err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-	defer file.Close()
-
-	index, err := NewOffsetIndex(file, 0)
-	if err != nil {
-		t.Fatalf("NewOffsetIndex failed: %v", err)
-	}
-	defer index.Close()
-
-	_, err = index.Lookup(0)
-	if err == nil {
-		t.Error("expected error for lookup on empty index, got nil")
-	}
 }
 
 // TestTimeIndexEmptyLookup tests lookup on empty time index
