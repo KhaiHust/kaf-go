@@ -37,7 +37,7 @@ type Segment struct {
 // NewSegment creates a new segment with the given base offset and configuration.
 func NewSegment(dir string, baseOffset int64, segmentConfig *config.CommitLogConfig) (*Segment, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create segment directory: %v", err)
+		return nil, err
 	}
 	// Create file names: {baseOffset}.log, {baseOffset}.offsetIndex, {baseOffset}.timeindex
 	logFilePath := filepath.Join(dir, fmt.Sprintf("%020d.log", baseOffset))
@@ -46,20 +46,20 @@ func NewSegment(dir string, baseOffset int64, segmentConfig *config.CommitLogCon
 
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create log file: %v", err)
+		return nil, err
 	}
 
 	offsetIndexFile, err := os.OpenFile(indexFilePath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		_ = logFile.Close()
-		return nil, fmt.Errorf("failed to create offsetIndex file: %v", err)
+		return nil, err
 	}
 
 	timeIndexFile, err := os.OpenFile(timeIndexFilePath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		_ = logFile.Close()
 		_ = offsetIndexFile.Close()
-		return nil, fmt.Errorf("failed to create time offsetIndex file: %v", err)
+		return nil, err
 	}
 
 	offsetIndex, err := NewOffsetIndex(offsetIndexFile, baseOffset)
@@ -67,7 +67,7 @@ func NewSegment(dir string, baseOffset int64, segmentConfig *config.CommitLogCon
 		_ = logFile.Close()
 		_ = offsetIndexFile.Close()
 		_ = timeIndexFile.Close()
-		return nil, fmt.Errorf("failed to create offset offsetIndex: %v", err)
+		return nil, err
 	}
 
 	timeIndex, err := NewTimeIndex(timeIndexFile, baseOffset)
@@ -76,7 +76,7 @@ func NewSegment(dir string, baseOffset int64, segmentConfig *config.CommitLogCon
 		_ = offsetIndexFile.Close()
 		_ = timeIndexFile.Close()
 		_ = offsetIndex.Close()
-		return nil, fmt.Errorf("failed to create time offsetIndex: %v", err)
+		return nil, err
 	}
 
 	fileInfo, err := os.Stat(logFilePath)
@@ -86,7 +86,7 @@ func NewSegment(dir string, baseOffset int64, segmentConfig *config.CommitLogCon
 		_ = timeIndexFile.Close()
 		_ = offsetIndex.Close()
 		_ = timeIndex.Close()
-		return nil, fmt.Errorf("failed to get log file info: %v", err)
+		return nil, err
 	}
 
 	return &Segment{
