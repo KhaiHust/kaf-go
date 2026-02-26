@@ -85,26 +85,40 @@ func (idx *OffsetIndex) Lookup(offset int64) (int, error) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
+	if idx.entryCount == 0 {
+		return 0, nil
+	}
+
 	relativeOffset := int(offset - idx.baseOffset)
 	left, right := 0, idx.entryCount-1
-	result := 0
+	result := -1
+
 	for left <= right {
 		mid := left + (right-left)/2
 
 		entryPosition := int64(mid * entrySize)
 		entryRelativeOffset := int(binary.BigEndian.Uint32(idx.mmap[entryPosition : entryPosition+4]))
+
 		if entryRelativeOffset == relativeOffset {
-			result = int(binary.BigEndian.Uint32(idx.mmap[entryPosition+4 : entryPosition+8]))
-			return result, nil
+			return int(binary.BigEndian.Uint32(idx.mmap[entryPosition+4 : entryPosition+8])), nil
 		}
 		if entryRelativeOffset < relativeOffset {
+			result = mid
 			left = mid + 1
 		} else {
 			right = mid - 1
 		}
 	}
 
-	return 0, fmt.Errorf("relative offset %d not found in index", offset)
+	// Return the floor entry (largest offset <= requested offset)
+	if result >= 0 {
+		entryPosition := int64(result * entrySize)
+		return int(binary.BigEndian.Uint32(idx.mmap[entryPosition+4 : entryPosition+8])), nil
+	}
+
+	// No floor entry found (requested offset is before all indexed entries)
+	// Return position 0 to start from beginning
+	return 0, nil
 }
 
 func (idx *OffsetIndex) EntryCount() int {

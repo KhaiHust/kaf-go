@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log/slog"
 	"slices"
 	"time"
 )
@@ -124,66 +125,78 @@ func SerializeMessage(message Message) ([]byte, error) {
 func DeserializeMessage(reader io.Reader) (*Message, int, error) {
 	var size uint32
 	if err := binary.Read(reader, binary.BigEndian, &size); err != nil {
-		return nil, 0, fmt.Errorf("could not read message size: %v", err)
+		slog.Error("could not read message size", "error", err.Error())
+		return nil, 0, err
 	}
 
 	buff := make([]byte, size)
 	if _, err := io.ReadFull(reader, buff); err != nil {
-		return nil, 0, fmt.Errorf("could not read message payload: %v", err)
+		slog.Error("could not read message size", "error", err.Error())
+		return nil, 0, err
 	}
 	buffer := bytes.NewReader(buff)
 	byteRead := 4 // size field already read
 
 	var crc uint32
 	if err := binary.Read(buffer, binary.BigEndian, &crc); err != nil {
-		return nil, 0, fmt.Errorf("could not read message CRC: %v", err)
+		slog.Error("could not read message CRC", "error", err.Error())
+		return nil, 0, err
 	}
 	byteRead += 4
 
 	payload := buff[4:] // Payload starts after CRC field
 	if crc32.ChecksumIEEE(payload) != crc {
-		return nil, 0, fmt.Errorf("CRC mismatch: expected %d, got %d", crc, crc32.ChecksumIEEE(payload))
+		err := fmt.Errorf("CRC mismatch: expected %d, got %d", crc, crc32.ChecksumIEEE(payload))
+		slog.Error("message CRC mismatch", "error", err.Error())
+		return nil, 0, err
 	}
 
 	var offset uint64
 	if err := binary.Read(buffer, binary.BigEndian, &offset); err != nil {
-		return nil, 0, fmt.Errorf("could not read message offset: %v", err)
+		slog.Error("could not read message offset", "error", err.Error())
+		return nil, 0, err
 	}
 	byteRead += 8
 
 	var timestamp uint64
 	if err := binary.Read(buffer, binary.BigEndian, &timestamp); err != nil {
-		return nil, 0, fmt.Errorf("could not read message timestamp: %v", err)
+		slog.Error("could not read message timestamp", "error", err.Error())
+		return nil, 0, err
 	}
 	byteRead += 8
 
 	var keyLen uint32
 	if err := binary.Read(buffer, binary.BigEndian, &keyLen); err != nil {
-		return nil, 0, fmt.Errorf("could not read message key length: %v", err)
+		slog.Error("could not read message key length", "error", err.Error())
+		return nil, 0, err
 	}
 	byteRead += 4
 
 	key := make([]byte, keyLen)
 	if _, err := buffer.Read(key); err != nil {
-		return nil, 0, fmt.Errorf("could not read message key: %v", err)
+		slog.Error("could not read message key", "error", err.Error())
+		return nil, 0, err
 	}
 	byteRead += int(keyLen)
 
 	var valueLen uint32
 	if err := binary.Read(buffer, binary.BigEndian, &valueLen); err != nil {
-		return nil, 0, fmt.Errorf("could not read message value length: %v", err)
+		slog.Error("could not read message value length", "error", err.Error())
+		return nil, 0, err
 	}
 	byteRead += 4
 
 	value := make([]byte, valueLen)
 	if _, err := buffer.Read(value); err != nil {
-		return nil, 0, fmt.Errorf("could not read message value: %v", err)
+		slog.Error("could not read message value", "error", err.Error())
+		return nil, 0, err
 	}
 	byteRead += int(valueLen)
 
 	var headerCount uint32
 	if err := binary.Read(buffer, binary.BigEndian, &headerCount); err != nil {
-		return nil, 0, fmt.Errorf("could not read message header count: %v", err)
+		slog.Error("could not read message header count", "error", err.Error())
+		return nil, 0, err
 	}
 	byteRead += 4
 
@@ -191,25 +204,29 @@ func DeserializeMessage(reader io.Reader) (*Message, int, error) {
 	for i := uint32(0); i < headerCount; i++ {
 		var keyHeaderLen uint32
 		if err := binary.Read(buffer, binary.BigEndian, &keyHeaderLen); err != nil {
-			return nil, 0, fmt.Errorf("could not read header key length: %v", err)
+			slog.Error("could not read header key length", "error", err.Error())
+			return nil, 0, err
 		}
 		byteRead += 4
 
 		keyBytes := make([]byte, keyHeaderLen)
 		if _, err := buffer.Read(keyBytes); err != nil {
-			return nil, 0, fmt.Errorf("could not read header key: %v", err)
+			slog.Error("could not read header key", "error", err.Error())
+			return nil, 0, err
 		}
 		byteRead += int(keyHeaderLen)
 
 		var valueHeaderLen uint32
 		if err := binary.Read(buffer, binary.BigEndian, &valueHeaderLen); err != nil {
-			return nil, 0, fmt.Errorf("could not read header value length: %v", err)
+			slog.Error("could not read header value length", "error", err.Error())
+			return nil, 0, err
 		}
 		byteRead += 4
 
 		valueBytes := make([]byte, valueHeaderLen)
 		if _, err := buffer.Read(valueBytes); err != nil {
-			return nil, 0, fmt.Errorf("could not read header value: %v", err)
+			slog.Error("could not read header value", "error", err.Error())
+			return nil, 0, err
 		}
 		byteRead += int(valueHeaderLen)
 
