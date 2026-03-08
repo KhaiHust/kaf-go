@@ -344,9 +344,9 @@ func TestWriter_WriteCompactNullableString(t *testing.T) {
 		value types.CompactNullableString
 		want  []byte
 	}{
-		{"null", nil, []byte{0x00}}, // 0 indicates null
-		{"hello", &hello, []byte{0x06, 0x00, 0x05, 'h', 'e', 'l', 'l', 'o'}}, // length+1, then string with its length prefix
-		{"empty", &empty, []byte{0x01, 0x00, 0x00}},                          // length+1=1, then empty string
+		{"null", nil, []byte{0x00}},                              // 0 indicates null
+		{"hello", &hello, []byte{0x06, 'h', 'e', 'l', 'l', 'o'}}, // length+1, then string with its length prefix
+		{"empty", &empty, []byte{0x01}},                          // length+1=1, then empty string
 	}
 
 	for _, tt := range tests {

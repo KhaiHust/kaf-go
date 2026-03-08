@@ -1,6 +1,6 @@
 package protocol
 
 type Response interface {
-	IDecoder
+	ICodec
 	ApiKey() int16
 }

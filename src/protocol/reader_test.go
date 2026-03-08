@@ -461,7 +461,7 @@ func TestReader_ReadCompactNullableString(t *testing.T) {
 		want    *string
 		wantErr bool
 	}{
-		{"null", []byte{0x01}, nil, false},                              // length 0 + 1 = 1, means null
+		{"null", []byte{0x00}, nil, false},                              // length 0 + 1 = 1, means null
 		{"hello", []byte{0x06, 'h', 'e', 'l', 'l', 'o'}, &hello, false}, // length 5 + 1 = 6
 		{"empty buffer", []byte{}, nil, true},
 	}
