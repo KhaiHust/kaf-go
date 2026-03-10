@@ -297,6 +297,51 @@ func (r *Reader) ReadCompactArrayLen() (int, error) {
 	return int(wl - 1), nil
 }
 
+// ReadRecords reads a RECORDS type (sequence of Kafka records as NULLABLE_BYTES).
+// Returns nil if the records are null (length = -1).
+func (r *Reader) ReadRecords() (types.Records, error) {
+	n, err := r.ReadInt32()
+	if err != nil {
+		return nil, err
+	}
+	if n == -1 {
+		return nil, nil
+	}
+	if n < -1 {
+		return nil, errors.New("records: invalid length")
+	}
+	if err = r.require(int(n)); err != nil {
+		return nil, err
+	}
+	b := make([]byte, n)
+	copy(b, r.buff[r.pos:r.pos+int(n)])
+	r.pos += int(n)
+	return types.Records(b), nil
+}
+
+// ReadCompactRecords reads a COMPACT_RECORDS type (sequence of Kafka records as COMPACT_NULLABLE_BYTES).
+// Returns nil if the records are null (length = 0).
+func (r *Reader) ReadCompactRecords() (types.CompactRecords, error) {
+	wl, err := r.ReadUVarInt()
+	if err != nil {
+		return nil, err
+	}
+	if wl == 0 {
+		return nil, nil
+	}
+	n := int(wl) - 1
+	if n < 0 {
+		return nil, errors.New("compact records: invalid length")
+	}
+	if err = r.require(n); err != nil {
+		return nil, err
+	}
+	b := make([]byte, n)
+	copy(b, r.buff[r.pos:r.pos+n])
+	r.pos += n
+	return types.CompactRecords(b), nil
+}
+
 func (r *Reader) ReadTaggedFields() error {
 	count, err := r.ReadUVarInt()
 	if err != nil {
@@ -318,4 +363,94 @@ func (r *Reader) ReadTaggedFields() error {
 		r.pos += int(size)
 	}
 	return nil
+}
+
+func (r *Reader) ReadVarint() (types.Varint, error) {
+	uval, err := r.ReadUVarInt()
+	if err != nil {
+		return 0, err
+	}
+	return types.Varint(int64((uval >> 1) ^ -(uval & 1))), nil
+}
+
+func (r *Reader) ReadVarlong() (types.Varlong, error) {
+	uval, err := r.ReadUVarInt()
+	if err != nil {
+		return 0, err
+	}
+	return types.Varlong((uval >> 1) ^ -(uval & 1)), nil
+}
+
+func (r *Reader) ReadRecordHeader() (types.RecordHeader, error) {
+	var recordHeader types.RecordHeader
+	var err error
+	if recordHeader.HeaderKeyLength, err = r.ReadVarint(); err != nil {
+		return recordHeader, err
+	}
+	if recordHeader.HeaderKey, err = r.ReadString(); err != nil {
+		return recordHeader, err
+	}
+	if recordHeader.HeaderValueLength, err = r.ReadVarint(); err != nil {
+		return recordHeader, err
+	}
+	if recordHeader.Value, err = r.ReadBytes(); err != nil {
+		return recordHeader, err
+	}
+	return recordHeader, nil
+}
+func (r *Reader) ReadRecord() (types.Record, error) {
+	var record types.Record
+	var err error
+	if record.Length, err = r.ReadVarint(); err != nil {
+		return record, err
+	}
+	if record.Attributes, err = r.ReadInt8(); err != nil {
+		return record, err
+	}
+	if record.TimestampDelta, err = r.ReadVarlong(); err != nil {
+		return record, err
+	}
+	if record.OffsetDelta, err = r.ReadVarint(); err != nil {
+		return record, err
+	}
+	if record.KeyLength, err = r.ReadVarint(); err != nil {
+		return record, err
+	}
+	if record.Key, err = r.ReadBytes(); err != nil {
+		return record, err
+	}
+	if record.ValueLength, err = r.ReadVarint(); err != nil {
+		return record, err
+	}
+	if record.Value, err = r.ReadBytes(); err != nil {
+		return record, err
+	}
+	if record.HeadersCount, err = r.ReadVarint(); err != nil {
+		return record, err
+	}
+	headerCount := int(record.HeadersCount)
+	var headers []types.RecordHeader
+	for i := 0; i < headerCount; i++ {
+		recordHeader, err := r.ReadRecordHeader()
+		if err != nil {
+			return record, err
+		}
+		headers = append(headers, recordHeader)
+	}
+	record.Headers = headers
+	return record, nil
+}
+
+// ReadRecordBatch reads a sequence of individual Record structs from the buffer.
+// This is different from ReadRecords which reads raw bytes as NULLABLE_BYTES.
+func (r *Reader) ReadRecordBatch(count int) ([]types.Record, error) {
+	var records []types.Record
+	for i := 0; i < count; i++ {
+		record, err := r.ReadRecord()
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }

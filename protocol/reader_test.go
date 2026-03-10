@@ -883,6 +883,197 @@ func TestWriter_Reader_Roundtrip_UUID(t *testing.T) {
 	}
 }
 
+func TestReader_ReadRecords(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		want    []byte
+		wantErr bool
+	}{
+		{"null", []byte{0xFF, 0xFF, 0xFF, 0xFF}, nil, false},       // -1 length
+		{"empty", []byte{0x00, 0x00, 0x00, 0x00}, []byte{}, false}, // 0 length
+		{"data", []byte{0x00, 0x00, 0x00, 0x03, 0x01, 0x02, 0x03}, []byte{0x01, 0x02, 0x03}, false},
+		{"single byte", []byte{0x00, 0x00, 0x00, 0x01, 0xAB}, []byte{0xAB}, false},
+		{"invalid negative", []byte{0xFF, 0xFF, 0xFF, 0xFE}, nil, true},      // -2 is invalid
+		{"truncated", []byte{0x00, 0x00, 0x00, 0x05, 0x01, 0x02}, nil, true}, // only 2 bytes of 5
+		{"no length", []byte{0x00, 0x00}, nil, true},                         // incomplete length
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewReader(tt.data)
+			got, err := r.ReadRecords()
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ReadRecords() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr {
+				if tt.want == nil && got != nil {
+					t.Errorf("ReadRecords() = %v, want nil", got)
+				} else if tt.want != nil {
+					if len(got) != len(tt.want) {
+						t.Errorf("ReadRecords() length = %d, want %d", len(got), len(tt.want))
+					}
+					for i := range got {
+						if got[i] != tt.want[i] {
+							t.Errorf("ReadRecords()[%d] = %v, want %v", i, got[i], tt.want[i])
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestReader_ReadCompactRecords(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		want    []byte
+		wantErr bool
+	}{
+		{"null", []byte{0x00}, nil, false},                                        // 0 indicates null
+		{"empty", []byte{0x01}, []byte{}, false},                                  // length 0 + 1 = 1
+		{"data", []byte{0x04, 0x01, 0x02, 0x03}, []byte{0x01, 0x02, 0x03}, false}, // length 3 + 1 = 4
+		{"single byte", []byte{0x02, 0xAB}, []byte{0xAB}, false},                  // length 1 + 1 = 2
+		{"128 bytes", func() []byte {
+			// length 128 + 1 = 129 encoded as varint: 0x81, 0x01
+			data := make([]byte, 128)
+			for i := range data {
+				data[i] = byte(i)
+			}
+			return append([]byte{0x81, 0x01}, data...)
+		}(), func() []byte {
+			data := make([]byte, 128)
+			for i := range data {
+				data[i] = byte(i)
+			}
+			return data
+		}(), false},
+		{"truncated", []byte{0x05, 0x01, 0x02}, nil, true}, // only 2 bytes of 4
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewReader(tt.data)
+			got, err := r.ReadCompactRecords()
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ReadCompactRecords() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr {
+				if tt.want == nil && got != nil {
+					t.Errorf("ReadCompactRecords() = %v, want nil", got)
+				} else if tt.want != nil {
+					if len(got) != len(tt.want) {
+						t.Errorf("ReadCompactRecords() length = %d, want %d", len(got), len(tt.want))
+					}
+					for i := range got {
+						if got[i] != tt.want[i] {
+							t.Errorf("ReadCompactRecords()[%d] = %v, want %v", i, got[i], tt.want[i])
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRoundtrip_Records(t *testing.T) {
+	tests := []struct {
+		name  string
+		value []byte
+	}{
+		{"null", nil},
+		{"empty", []byte{}},
+		{"data", []byte{0x01, 0x02, 0x03, 0x04, 0x05}},
+		{"single byte", []byte{0xAB}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := NewWriter(20)
+			w.WriteRecords(tt.value)
+
+			r := NewReader(w.Bytes())
+			got, err := r.ReadRecords()
+
+			if err != nil {
+				t.Errorf("Roundtrip Records error = %v", err)
+				return
+			}
+
+			if tt.value == nil {
+				if got != nil {
+					t.Errorf("Roundtrip Records = %v, want nil", got)
+				}
+			} else {
+				if len(got) != len(tt.value) {
+					t.Errorf("Roundtrip Records length = %d, want %d", len(got), len(tt.value))
+				}
+				for i := range got {
+					if got[i] != tt.value[i] {
+						t.Errorf("Roundtrip Records[%d] = %v, want %v", i, got[i], tt.value[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRoundtrip_CompactRecords(t *testing.T) {
+	tests := []struct {
+		name  string
+		value []byte
+	}{
+		{"null", nil},
+		{"empty", []byte{}},
+		{"data", []byte{0x01, 0x02, 0x03, 0x04, 0x05}},
+		{"single byte", []byte{0xAB}},
+		{"128 bytes", func() []byte {
+			data := make([]byte, 128)
+			for i := range data {
+				data[i] = byte(i)
+			}
+			return data
+		}()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := NewWriter(200)
+			w.WriteCompactRecords(tt.value)
+
+			r := NewReader(w.Bytes())
+			got, err := r.ReadCompactRecords()
+
+			if err != nil {
+				t.Errorf("Roundtrip CompactRecords error = %v", err)
+				return
+			}
+
+			if tt.value == nil {
+				if got != nil {
+					t.Errorf("Roundtrip CompactRecords = %v, want nil", got)
+				}
+			} else {
+				if len(got) != len(tt.value) {
+					t.Errorf("Roundtrip CompactRecords length = %d, want %d", len(got), len(tt.value))
+				}
+				for i := range got {
+					if got[i] != tt.value[i] {
+						t.Errorf("Roundtrip CompactRecords[%d] = %v, want %v", i, got[i], tt.value[i])
+					}
+				}
+			}
+		})
+	}
+}
+
 // Benchmark tests
 
 func BenchmarkReader_ReadInt8(b *testing.B) {

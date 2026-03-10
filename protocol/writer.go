@@ -151,3 +151,49 @@ func UVarIntSize(v uint64) int {
 	}
 	return (bits.Len64(v) + 6) / 7
 }
+func (w *Writer) WriteVarint(vint types.Varint) {
+	w.WriteVarInt(int64(vint))
+}
+
+func (w *Writer) WriteVarlong(vlong types.Varlong) {
+	w.WriteVarInt(int64(vlong))
+}
+
+func (w *Writer) WriteRecords(records types.Records) {
+	if records == nil {
+		w.WriteInt32(-1)
+		return
+	}
+	w.WriteInt32(int32(len(records)))
+	w.buff = append(w.buff, records...)
+}
+
+func (w *Writer) WriteCompactRecords(records types.CompactRecords) {
+	if records == nil {
+		w.WriteUVarInt(0)
+		return
+	}
+	w.WriteUVarInt(uint64(len(records) + 1))
+	w.buff = append(w.buff, records...)
+}
+
+func (w *Writer) WriteRecord(rc *types.Record) {
+	w.WriteVarint(rc.Length)
+	w.WriteInt8(rc.Attributes)
+	w.WriteVarint(rc.OffsetDelta)
+	w.WriteVarint(rc.KeyLength)
+	w.WriteBytes(rc.Key)
+	w.WriteVarint(rc.ValueLength)
+	w.WriteBytes(rc.Value)
+	w.WriteVarint(rc.HeadersCount)
+	for _, h := range rc.Headers {
+		w.WriteRecordHeader(&h)
+	}
+}
+
+func (w *Writer) WriteRecordHeader(h *types.RecordHeader) {
+	w.WriteVarint(h.HeaderKeyLength)
+	w.WriteString(h.HeaderKey)
+	w.WriteVarint(h.HeaderValueLength)
+	w.WriteBytes(h.Value)
+}

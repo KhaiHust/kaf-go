@@ -623,6 +623,68 @@ func TestUVarIntSize(t *testing.T) {
 	}
 }
 
+func TestWriter_WriteRecords(t *testing.T) {
+	tests := []struct {
+		name  string
+		value types.Records
+		want  []byte
+	}{
+		{"null", nil, []byte{0xFF, 0xFF, 0xFF, 0xFF}}, // -1 in big endian int32
+		{"empty", types.Records{}, []byte{0x00, 0x00, 0x00, 0x00}},
+		{"data", types.Records{0x01, 0x02, 0x03}, []byte{0x00, 0x00, 0x00, 0x03, 0x01, 0x02, 0x03}},
+		{"single byte", types.Records{0xAB}, []byte{0x00, 0x00, 0x00, 0x01, 0xAB}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := NewWriter(20)
+			w.WriteRecords(tt.value)
+
+			if !bytes.Equal(w.Bytes(), tt.want) {
+				t.Errorf("WriteRecords(%v) = %v, want %v", tt.value, w.Bytes(), tt.want)
+			}
+		})
+	}
+}
+
+func TestWriter_WriteCompactRecords(t *testing.T) {
+	tests := []struct {
+		name  string
+		value types.CompactRecords
+		want  []byte
+	}{
+		{"null", nil, []byte{0x00}},                                                      // 0 indicates null
+		{"empty", types.CompactRecords{}, []byte{0x01}},                                  // length 0 + 1 = 1
+		{"data", types.CompactRecords{0x01, 0x02, 0x03}, []byte{0x04, 0x01, 0x02, 0x03}}, // length 3 + 1 = 4
+		{"single byte", types.CompactRecords{0xAB}, []byte{0x02, 0xAB}},                  // length 1 + 1 = 2
+		{"128 bytes", func() types.CompactRecords {
+			data := make([]byte, 128)
+			for i := range data {
+				data[i] = byte(i)
+			}
+			return types.CompactRecords(data)
+		}(), func() []byte {
+			// length 128 + 1 = 129 encoded as varint: 0x81, 0x01
+			data := make([]byte, 128)
+			for i := range data {
+				data[i] = byte(i)
+			}
+			return append([]byte{0x81, 0x01}, data...)
+		}()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := NewWriter(200)
+			w.WriteCompactRecords(tt.value)
+
+			if !bytes.Equal(w.Bytes(), tt.want) {
+				t.Errorf("WriteCompactRecords(%v) = %v, want %v", tt.value, w.Bytes(), tt.want)
+			}
+		})
+	}
+}
+
 // Benchmark tests
 
 func BenchmarkWriter_WriteInt8(b *testing.B) {

@@ -427,7 +427,7 @@ func TestHandleCreateTopics_Success(t *testing.T) {
 		ValidateOnly: false,
 	}
 
-	// Encode the request
+	// Write the request
 	writer := protocol.NewWriter(256)
 	if err := request.Encode(writer); err != nil {
 		t.Fatalf("failed to encode request: %v", err)
