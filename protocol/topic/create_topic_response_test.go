@@ -34,7 +34,7 @@ func TestCreateTopicsResponse_EncodeDecodeRoundtrip_Empty(t *testing.T) {
 	}
 
 	if len(decoded.Topics) != 0 {
-		t.Errorf("Topics length = %d, want 0", len(decoded.Topics))
+		t.Errorf("topics length = %d, want 0", len(decoded.Topics))
 	}
 	if decoded.ThrottleTimeMs != original.ThrottleTimeMs {
 		t.Errorf("ThrottleTimeMs = %d, want %d", decoded.ThrottleTimeMs, original.ThrottleTimeMs)
@@ -74,7 +74,7 @@ func TestCreateTopicsResponse_EncodeDecodeRoundtrip_SingleTopic(t *testing.T) {
 	}
 
 	if len(decoded.Topics) != 1 {
-		t.Fatalf("Topics length = %d, want 1", len(decoded.Topics))
+		t.Fatalf("topics length = %d, want 1", len(decoded.Topics))
 	}
 	if string(decoded.Topics[0].Name) != "test-topic" {
 		t.Errorf("Topic name = %s, want test-topic", decoded.Topics[0].Name)
@@ -130,7 +130,7 @@ func TestCreateTopicsResponse_EncodeDecodeRoundtrip_WithErrorMessage(t *testing.
 	}
 
 	if len(decoded.Topics) != 1 {
-		t.Fatalf("Topics length = %d, want 1", len(decoded.Topics))
+		t.Fatalf("topics length = %d, want 1", len(decoded.Topics))
 	}
 	if decoded.Topics[0].ErrorCode != 36 {
 		t.Errorf("ErrorCode = %d, want 36", decoded.Topics[0].ErrorCode)
@@ -192,7 +192,7 @@ func TestCreateTopicsResponse_EncodeDecodeRoundtrip_WithConfigs(t *testing.T) {
 	}
 
 	if len(decoded.Topics) != 1 {
-		t.Fatalf("Topics length = %d, want 1", len(decoded.Topics))
+		t.Fatalf("topics length = %d, want 1", len(decoded.Topics))
 	}
 	if len(decoded.Topics[0].Configs) != 2 {
 		t.Fatalf("Configs length = %d, want 2", len(decoded.Topics[0].Configs))
@@ -284,7 +284,7 @@ func TestCreateTopicsResponse_EncodeDecodeRoundtrip_MultipleTopics(t *testing.T)
 	}
 
 	if len(decoded.Topics) != 3 {
-		t.Fatalf("Topics length = %d, want 3", len(decoded.Topics))
+		t.Fatalf("topics length = %d, want 3", len(decoded.Topics))
 	}
 
 	expectedNames := []string{"topic-1", "topic-2", "topic-3"}

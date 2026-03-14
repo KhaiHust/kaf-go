@@ -48,7 +48,7 @@ func TestCreateTopicsRequest_EncodeDecodeRoundtrip_Empty(t *testing.T) {
 	}
 
 	if len(decoded.Topics) != 0 {
-		t.Errorf("Topics length = %d, want 0", len(decoded.Topics))
+		t.Errorf("topics length = %d, want 0", len(decoded.Topics))
 	}
 	if decoded.TimeoutMs != original.TimeoutMs {
 		t.Errorf("TimeoutMs = %d, want %d", decoded.TimeoutMs, original.TimeoutMs)
@@ -85,7 +85,7 @@ func TestCreateTopicsRequest_EncodeDecodeRoundtrip_SingleTopic(t *testing.T) {
 	}
 
 	if len(decoded.Topics) != 1 {
-		t.Fatalf("Topics length = %d, want 1", len(decoded.Topics))
+		t.Fatalf("topics length = %d, want 1", len(decoded.Topics))
 	}
 	if string(decoded.Topics[0].Name) != "test-topic" {
 		t.Errorf("Topic name = %s, want test-topic", decoded.Topics[0].Name)
@@ -145,7 +145,7 @@ func TestCreateTopicsRequest_EncodeDecodeRoundtrip_MultipleTopics(t *testing.T) 
 	}
 
 	if len(decoded.Topics) != 3 {
-		t.Fatalf("Topics length = %d, want 3", len(decoded.Topics))
+		t.Fatalf("topics length = %d, want 3", len(decoded.Topics))
 	}
 
 	expectedNames := []string{"topic-1", "topic-2", "topic-3"}
@@ -196,7 +196,7 @@ func TestCreateTopicsRequest_EncodeDecodeRoundtrip_WithAssignments(t *testing.T)
 	}
 
 	if len(decoded.Topics) != 1 {
-		t.Fatalf("Topics length = %d, want 1", len(decoded.Topics))
+		t.Fatalf("topics length = %d, want 1", len(decoded.Topics))
 	}
 
 	topic := decoded.Topics[0]
@@ -252,7 +252,7 @@ func TestCreateTopicsRequest_EncodeDecodeRoundtrip_WithConfigs(t *testing.T) {
 	}
 
 	if len(decoded.Topics) != 1 {
-		t.Fatalf("Topics length = %d, want 1", len(decoded.Topics))
+		t.Fatalf("topics length = %d, want 1", len(decoded.Topics))
 	}
 
 	topic := decoded.Topics[0]
@@ -350,7 +350,7 @@ func TestCreateTopicsRequest_EncodeDecodeRoundtrip_FullExample(t *testing.T) {
 
 	// Verify all fields
 	if len(decoded.Topics) != 1 {
-		t.Fatalf("Topics length = %d, want 1", len(decoded.Topics))
+		t.Fatalf("topics length = %d, want 1", len(decoded.Topics))
 	}
 
 	topic := decoded.Topics[0]

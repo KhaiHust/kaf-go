@@ -30,6 +30,12 @@ func (c *Conn) handle() {
 		if err != nil || framing == nil {
 			return
 		}
+
+		//slog.Info("raw data received",
+		//	"bytes", fmt.Sprintf("%x", framing),
+		//	"length", len(framing),
+		//)
+
 		reader := protocol.NewReader(framing)
 		var requestHeader protocol.RequestHeader
 		if err = requestHeader.Decode(reader); err != nil {
@@ -48,6 +54,12 @@ func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reade
 	slog.Info(fmt.Sprintf("api key: %v", apiKey))
 	//var resp []byte
 	switch apiKey {
+	case constant.ApiKeyProduce:
+		err := api.HandleProduceApiKeys(c.conn, header, reader, c.server.topicStore)
+		if err != nil {
+			slog.Error("handle produce failed: %v", err)
+		}
+
 	case constant.ApiKeyApiVersions:
 		responseHeader, response, err := api.HandleApiVersionApi(header, reader)
 		if err != nil {
@@ -59,16 +71,16 @@ func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reade
 		}
 
 	case constant.ApiKeyMetaData:
-		err := api.HandleMetaData(c.conn, header, reader)
+		err := api.HandleMetaData(c.conn, header, reader, c.server.topicStore)
 		if err != nil {
 			slog.Error("handle meta data failed: %v", err)
 		}
 	case constant.ApiKeyCreateTopics:
-		err := api.HandleCreateTopics(c.conn, header, reader)
+		err := api.HandleCreateTopics(c.conn, header, reader, c.server.topicStore)
 		if err != nil {
 			slog.Error("handle create topics failed: %v", err)
 		}
-
+		//fmt.Print(c.server.topicStore)
 	default:
 		slog.Error("api key not supported: %v", apiKey)
 	}

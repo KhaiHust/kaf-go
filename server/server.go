@@ -6,27 +6,27 @@ import (
 	"net"
 	"sync"
 
-	"github.com/KhaiHust/kaf-go/api"
+	"github.com/KhaiHust/kaf-go/storage"
 )
 
 type Server struct {
-	addr      string
-	logDir    string
-	brokerIDs []int32
-	store     *api.TopicStore
-	listener  net.Listener
-	wg        *sync.WaitGroup
-	quit      chan struct{}
+	addr       string
+	logDir     string
+	brokerIDs  []int32
+	topicStore *storage.TopicStore
+	listener   net.Listener
+	wg         *sync.WaitGroup
+	quit       chan struct{}
 }
 
 func NewServer(addr, logDir string, brokerIDs []int32) *Server {
 	return &Server{
-		addr:      addr,
-		logDir:    logDir,
-		brokerIDs: brokerIDs,
-		store:     api.NewTopicStore(),
-		quit:      make(chan struct{}),
-		wg:        new(sync.WaitGroup),
+		addr:       addr,
+		logDir:     logDir,
+		brokerIDs:  brokerIDs,
+		topicStore: storage.NewTopicStore(),
+		quit:       make(chan struct{}),
+		wg:         new(sync.WaitGroup),
 	}
 }
 

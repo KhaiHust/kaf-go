@@ -11,6 +11,7 @@ import (
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/topic"
+	"github.com/KhaiHust/kaf-go/storage"
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
 	"github.com/gofrs/uuid/v5"
 )
@@ -19,7 +20,7 @@ var (
 	LogStorageDataFolder = "./var/log/"
 )
 
-func HandleCreateTopics(conn net.Conn, header *protocol.RequestHeader, reader *protocol.Reader) error {
+func HandleCreateTopics(conn net.Conn, header *protocol.RequestHeader, reader *protocol.Reader, topicStore *storage.TopicStore) error {
 
 	createTopicRequest := new(topic.CreateTopicsRequest)
 	if err := createTopicRequest.Decode(reader); err != nil {
@@ -48,6 +49,11 @@ func HandleCreateTopics(conn net.Conn, header *protocol.RequestHeader, reader *p
 	response := &topic.CreateTopicsResponse{}
 	response.Topics = validateTopics(createTopicRequest.Topics)
 	response.ThrottleTimeMs = 0
+
+	for _, topicData := range response.Topics {
+		_ = topicStore.AddTopic(topicData)
+		_ = createTopicStorage(topicStore, topicData)
+	}
 	return protocol.WriteFraming(conn, responseHeader, response)
 
 }
@@ -70,11 +76,10 @@ func validateTopics(topics []topic.CreateTopicData) []topic.CreateTopicResponseD
 			newTopicResponse.NumPartitions = topics[idx].NumPartitions
 			newTopicResponse.ReplicationFactor = topics[idx].ReplicationFactor
 			newTopicResponse.Configs = topicConfis
-			//todo: create storage for topics
-			createTopicStorage(topics[idx])
 		}
 
 		topicsResponses[idx] = newTopicResponse
+
 	}
 	return topicsResponses
 }
@@ -99,7 +104,7 @@ func validateTopicData(topicData topic.CreateTopicData) int16 {
 	return 0
 }
 
-func createTopicStorage(topicRequestData topic.CreateTopicData) {
+func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.CreateTopicResponseData) error {
 	slog.Info("Create topic storage")
 	commitLogConfig := &config.CommitLogConfig{
 		SegmentMaxBytes: 1024 * 1024 * 100,
@@ -107,14 +112,14 @@ func createTopicStorage(topicRequestData topic.CreateTopicData) {
 		RetentionBytes:  1024 * 1024 * 100,
 		RetentionTime:   7 * 24 * time.Hour,
 	}
-	for numPar := int32(0); numPar < topicRequestData.NumPartitions; numPar++ {
-		dir := LogStorageDataFolder + fmt.Sprintf("%s-%d", topicRequestData.Name, numPar)
+	for numPar := int32(0); numPar < topicResponseData.NumPartitions; numPar++ {
+		dir := LogStorageDataFolder + fmt.Sprintf("%s-%d", topicResponseData.Name, numPar)
 		newCommitLog, err := commitlog.NewCommitLog(dir, commitLogConfig)
 		if err != nil {
-			slog.Error(err.Error())
-			return
+			slog.Error("Error creating new commit log", "error", err)
+			return err
 		}
-		_ = newCommitLog
+		topicStore.AddCommitLog(string(topicResponseData.Name), numPar, newCommitLog)
 	}
-	slog.Info("Create topic storage successfully")
+	return nil
 }

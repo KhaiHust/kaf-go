@@ -15,6 +15,11 @@ func HandleApiVersionApi(header *protocol.RequestHeader, reader *protocol.Reader
 		ErrorCode: 0,
 		ApiKeys: []admin.ApiKey{
 			{
+				ApiKey:     constant.ApiKeyProduce,
+				MinVersion: 12,
+				MaxVersion: 12,
+			},
+			{
 				ApiKey:     constant.ApiKeyApiVersions,
 				MinVersion: 0,
 				MaxVersion: 3,

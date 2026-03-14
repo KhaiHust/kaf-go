@@ -6,7 +6,7 @@ import "github.com/KhaiHust/kaf-go/constant"
 // Source: each API's JSON schema "flexibleVersions" field.
 // https://github.com/apache/kafka/blob/trunk/clients/src/main/resources/common/message/
 var apiFlexibleVersions = map[int16]int16{
-	0:                           9,  // Produce
+	constant.ApiKeyProduce:      9,  // Produce
 	1:                           12, // Fetch
 	2:                           6,  // ListOffsets
 	constant.ApiKeyMetaData:     9,  // Metadata
