@@ -16,7 +16,7 @@ func main() {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers("localhost:9092"),
 		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
-		kgo.ProducerBatchCompression(kgo.NoCompression()),
+		//kgo.ProducerBatchCompression(kgo.NoCompression()),
 	)
 	if err != nil {
 		log.Fatal(err)

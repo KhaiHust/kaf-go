@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/KhaiHust/kaf-go/common"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/types"
 )
@@ -84,8 +85,21 @@ func DecodeRecordBatch(raw []byte) (*RecordBatch, error) {
 	}
 
 	batch.Records = make([]BatchRecord, recordCount)
+
+	rawDataRecords, err := r.ReadRawBytes(r.Remaining())
+	if err != nil {
+		return nil, err
+	}
+
+	dataRecords, err := common.Decompress(batch.Attributes, rawDataRecords)
+	if err != nil {
+		return nil, err
+	}
+
+	rr := protocol.NewReader(dataRecords)
+
 	for i := range batch.Records {
-		batch.Records[i], err = decodeRecord(r, batch.FirstTimestamp)
+		batch.Records[i], err = decodeRecord(rr, batch.FirstTimestamp)
 		if err != nil {
 			return nil, fmt.Errorf("record %d: %w", i, err)
 		}

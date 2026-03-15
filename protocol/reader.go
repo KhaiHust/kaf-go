@@ -27,6 +27,18 @@ func (r *Reader) Done() bool {
 	return r.pos >= len(r.buff)
 }
 
+func (r *Reader) ReadRawBytes(n int) ([]byte, error) {
+	if r.pos >= len(r.buff) {
+		return nil, io.EOF
+	}
+	if err := r.require(n); err != nil {
+		return nil, err
+	}
+	raw := make([]byte, n)
+	copy(raw, r.buff[r.pos:r.pos+n])
+	return raw, nil
+}
+
 func (r *Reader) require(n int) error {
 	if r.pos+n > len(r.buff) {
 		return io.EOF

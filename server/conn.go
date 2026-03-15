@@ -31,10 +31,10 @@ func (c *Conn) handle() {
 			return
 		}
 
-		//slog.Info("raw data received",
-		//	"bytes", fmt.Sprintf("%x", framing),
-		//	"length", len(framing),
-		//)
+		slog.Info("raw data received",
+			"bytes", fmt.Sprintf("%x", framing),
+			"length", len(framing),
+		)
 
 		reader := protocol.NewReader(framing)
 		var requestHeader protocol.RequestHeader
