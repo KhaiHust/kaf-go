@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"regexp"
 	"time"
 
@@ -105,20 +106,34 @@ func validateTopicData(topicData topic.CreateTopicData) int16 {
 }
 
 func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.CreateTopicResponseData) error {
-	slog.Info("Create topic storage")
 	commitLogConfig := &config.CommitLogConfig{
 		SegmentMaxBytes: 1024 * 1024 * 100,
 		IndexInterval:   4 * 1024,
 		RetentionBytes:  1024 * 1024 * 100,
 		RetentionTime:   7 * 24 * time.Hour,
 	}
+
+	topicName := topicResponseData.Name.String()
+	topicDir := LogStorageDataFolder + topicName
+	err := storage.SaveTopicMeta(topicDir, storage.TopicMeta{
+		Name:              topicName,
+		TopicId:           topicResponseData.TopicId.String(),
+		NumPartitions:     topicResponseData.NumPartitions,
+		ReplicationFactor: topicResponseData.ReplicationFactor,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to save topic meta: %w", err)
+	}
+
 	for numPar := int32(0); numPar < topicResponseData.NumPartitions; numPar++ {
-		dir := LogStorageDataFolder + fmt.Sprintf("%s-%d", topicResponseData.Name, numPar)
+		dir := filepath.Join(topicDir, fmt.Sprintf("%s-%d", topicResponseData.Name, numPar))
+
 		newCommitLog, err := commitlog.NewCommitLog(dir, commitLogConfig)
 		if err != nil {
 			slog.Error("Error creating new commit log", "error", err)
 			return err
 		}
+
 		topicStore.AddCommitLog(string(topicResponseData.Name), numPar, newCommitLog)
 	}
 	return nil

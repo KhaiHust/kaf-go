@@ -16,6 +16,7 @@ func main() {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers("localhost:9092"),
 		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
+		kgo.ProducerBatchCompression(kgo.NoCompression()),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -42,13 +43,17 @@ func main() {
 	}
 
 	// Send messages to the topic
-	record := &kgo.Record{
-		Topic: "orders",
-		Key:   []byte("order-0"),
-		Value: []byte(`{"order_id": "12345", "product": "laptop", "quantity": 1}`),
+	records := make([]*kgo.Record, 100)
+	for idx := 0; idx < 100; idx++ {
+		record := &kgo.Record{
+			Topic: "orders",
+			Key:   []byte(fmt.Sprintf("%d", idx)),
+			Value: []byte(`{"order_id": "12345", "product": "laptop", "quantity": 1}`),
+		}
+		records[idx] = record
 	}
 
-	results := client.ProduceSync(ctx, record)
+	results := client.ProduceSync(ctx, records...)
 	for _, pr := range results {
 		if pr.Err != nil {
 			fmt.Printf("FAIL  produce error=%v\n", pr.Err)

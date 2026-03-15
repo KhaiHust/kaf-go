@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	server := server2.NewServer(":9092", "var/test/logs", []int32{1})
+	server := server2.NewServer(":9092", "var/log", []int32{1})
 	err := server.Start()
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)

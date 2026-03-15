@@ -8,7 +8,9 @@ import (
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol/admin"
 	"github.com/KhaiHust/kaf-go/protocol/topic"
+	"github.com/KhaiHust/kaf-go/protocol/types"
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
+	"github.com/gofrs/uuid/v5"
 )
 
 type TopicStore struct {
@@ -66,24 +68,51 @@ func (t *TopicStore) GetTopicMetadata(names []string) ([]admin.MetadataResponseT
 		if !ok {
 			return nil, constant.CreateError(constant.ErrInvalidTopicException)
 		}
-		topics = append(topics, admin.MetadataResponseTopic{
-			ErrorCode:  0,
-			Name:       common.StringPtr(string(topicData.Name)),
-			TopicID:    topicData.TopicId,
-			IsInternal: false,
-			Partitions: []admin.MetadataResponsePartition{
-				{
-					ErrorCode:       0,
-					PartitionIndex:  0,
-					LeaderID:        1,
-					LeaderEpoch:     1,
-					ReplicaNodes:    []int32{1},
-					IsrNodes:        []int32{1},
-					OfflineReplicas: []int32{1},
-				},
+
+		var metadataResponsePartitions []admin.MetadataResponsePartition
+		for idx := int32(0); idx < topicData.NumPartitions; idx++ {
+			metadataResponsePartitions = append(metadataResponsePartitions, admin.MetadataResponsePartition{
+
+				ErrorCode:       0,
+				PartitionIndex:  idx,
+				LeaderID:        1,
+				LeaderEpoch:     1,
+				ReplicaNodes:    []int32{1},
+				IsrNodes:        []int32{1},
+				OfflineReplicas: []int32{1},
 			},
+			)
+		}
+
+		topics = append(topics, admin.MetadataResponseTopic{
+			ErrorCode:                 0,
+			Name:                      common.StringPtr(string(topicData.Name)),
+			TopicID:                   topicData.TopicId,
+			IsInternal:                false,
+			Partitions:                metadataResponsePartitions,
 			TopicAuthorizedOperations: 0,
 		})
 	}
 	return topics, nil
+}
+
+func (t *TopicStore) AddTopicMetadata(metaData *TopicMeta) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.topics[(metaData.Name)]; ok {
+		return constant.CreateError(constant.ErrTopicAlreadyExists)
+	}
+
+	topicId, err := uuid.FromString(metaData.TopicId)
+	if err != nil {
+		return fmt.Errorf("topic id %s is not a valid uuid", metaData.TopicId)
+	}
+	t.topics[(metaData.Name)] = topic.CreateTopicResponseData{
+		Name:              types.CompactString(metaData.Name),
+		TopicId:           topicId,
+		NumPartitions:     metaData.NumPartitions,
+		ReplicationFactor: int16(metaData.ReplicationFactor),
+		ErrorCode:         0,
+	}
+	return nil
 }

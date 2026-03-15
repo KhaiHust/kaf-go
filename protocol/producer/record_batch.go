@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/KhaiHust/kaf-go/protocol"
+	"github.com/KhaiHust/kaf-go/protocol/types"
 )
 
 type RecordBatch struct {
@@ -23,8 +24,8 @@ type RecordBatch struct {
 }
 
 type BatchRecord struct {
-	TimestampDelta int64
-	OffsetDelta    int32
+	TimestampDelta types.Varlong
+	OffsetDelta    types.Varint
 	Key            []byte
 	Value          []byte
 	Headers        map[string][]byte
@@ -105,18 +106,18 @@ func decodeRecord(r *protocol.Reader, baseTimestamp int64) (BatchRecord, error) 
 		return rec, err
 	}
 	// TimestampDelta (VarInt zigzag)
-	tsDelta, err := r.ReadVarInt()
+	tsDelta, err := r.ReadVarlong()
 	if err != nil {
 		return rec, err
 	}
 	rec.TimestampDelta = tsDelta
 
 	// OffsetDelta
-	offDelta, err := r.ReadVarInt()
+	offDelta, err := r.ReadVarint()
 	if err != nil {
 		return rec, err
 	}
-	rec.OffsetDelta = int32(offDelta)
+	rec.OffsetDelta = offDelta
 
 	// Key: VarInt length (-1 = null)
 	keyLen, err := r.ReadVarInt()

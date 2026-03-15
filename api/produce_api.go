@@ -58,7 +58,7 @@ func HandleProduceApiKeys(conn net.Conn, header *protocol.RequestHeader, r *prot
 					Key:   record.Key,
 					Value: record.Value,
 					Timestamp: time.Unix(0,
-						batch.FirstTimestamp+record.TimestampDelta*int64(time.Millisecond)),
+						batch.FirstTimestamp+record.TimestampDelta.Long()*int64(time.Millisecond)),
 					Headers: record.Headers,
 				}
 			}
