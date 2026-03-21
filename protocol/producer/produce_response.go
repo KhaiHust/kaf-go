@@ -4,6 +4,7 @@ import (
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/types"
+	"github.com/gofrs/uuid/v5"
 )
 
 type ProduceResponse struct {
@@ -18,7 +19,7 @@ func (p *ProduceResponse) Decode(r *protocol.Reader) error {
 }
 
 type TopicProduceResponse struct {
-	Name               types.CompactString
+	TopicId            uuid.UUID
 	PartitionResponses []PartitionProduceResponse
 }
 
@@ -63,7 +64,7 @@ func (p *ProduceResponse) Encode(w *protocol.Writer) error {
 	// Responses array
 	w.WriteCompactArrayLen(len(p.Responses))
 	for _, topic := range p.Responses {
-		w.WriteCompactString(topic.Name)
+		w.WriteUUID(topic.TopicId)
 
 		// PartitionResponses array
 		w.WriteCompactArrayLen(len(topic.PartitionResponses))

@@ -4,6 +4,7 @@ import (
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/types"
+	"github.com/gofrs/uuid/v5"
 )
 
 type ProduceRequest struct {
@@ -42,19 +43,19 @@ func (p *ProduceRequest) Decode(r *protocol.Reader) error {
 }
 
 type ProduceRequestTopicData struct {
-	Name types.CompactString
-	//TopicId       uuid.UUID //version 13
+	Name          types.CompactString
+	TopicId       uuid.UUID //version 13
 	PartitionData []ProduceRequestPartitionData
 }
 
 func (t *ProduceRequestTopicData) decode(r *protocol.Reader) error {
 	var err error
-	if t.Name, err = r.ReadCompactString(); err != nil {
-		return err
-	}
-	//if t.TopicId, err = r.ReadUUID(); err != nil {
+	//if t.Name, err = r.ReadCompactString(); err != nil {
 	//	return err
 	//}
+	if t.TopicId, err = r.ReadUUID(); err != nil {
+		return err
+	}
 	partitionDataLength, err := r.ReadCompactArrayLen()
 	if err != nil {
 		return err

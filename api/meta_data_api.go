@@ -35,7 +35,7 @@ func HandleMetaData(conn net.Conn, header *protocol.RequestHeader, r *protocol.R
 	for i, t := range requestBody.Topics {
 		topicNames[i] = *t.Name
 	}
-	topicsMetaData, _ := store.GetTopicMetadata(topicNames)
+	topicsMetaData, _ := store.GetTopicMetadataByNames(topicNames)
 
 	responseBody := &admin.MetadataResponse{
 		ThrottleTimeMs: 0,

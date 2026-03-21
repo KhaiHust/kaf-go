@@ -15,6 +15,7 @@ import (
 	"github.com/KhaiHust/kaf-go/config"
 	"github.com/KhaiHust/kaf-go/storage"
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
+	"github.com/gofrs/uuid/v5"
 )
 
 type Server struct {
@@ -128,7 +129,11 @@ func (s *Server) recoverTopic() error {
 				return fmt.Errorf("failed to recover commitlog %s: %w", partitionDir, err)
 			}
 
-			s.topicStore.AddCommitLog(meta.Name, partitionIndex, commitLog)
+			var topicId uuid.UUID
+			if topicId, err = uuid.FromString(meta.TopicId); err != nil {
+				return err
+			}
+			s.topicStore.AddCommitLog(topicId, partitionIndex, commitLog)
 
 			slog.Info("recovered partition",
 				"topic", meta.Name,

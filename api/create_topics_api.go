@@ -134,7 +134,7 @@ func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.
 			return err
 		}
 
-		topicStore.AddCommitLog(string(topicResponseData.Name), numPar, newCommitLog)
+		topicStore.AddCommitLog(topicResponseData.TopicId, numPar, newCommitLog)
 	}
 	return nil
 }

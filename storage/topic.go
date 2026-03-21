@@ -14,57 +14,83 @@ import (
 )
 
 type TopicStore struct {
-	topics     map[string]topic.CreateTopicResponseData
+	topics     map[uuid.UUID]topic.CreateTopicResponseData
+	topicNames map[string]uuid.UUID
 	commitLogs map[string]commitlog.ICommitLog
 	mu         sync.RWMutex
 }
 
 func NewTopicStore() *TopicStore {
 	return &TopicStore{
-		topics:     make(map[string]topic.CreateTopicResponseData),
+		topics:     make(map[uuid.UUID]topic.CreateTopicResponseData),
+		topicNames: make(map[string]uuid.UUID),
 		commitLogs: make(map[string]commitlog.ICommitLog),
 		mu:         sync.RWMutex{},
 	}
 }
 
-func (t *TopicStore) AddCommitLog(topic string, partition int32, log commitlog.ICommitLog) {
+func (t *TopicStore) AddCommitLog(topicId uuid.UUID, partition int32, log commitlog.ICommitLog) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	key := fmt.Sprintf("%s-%d", topic, partition)
+	key := fmt.Sprintf("%s-%d", topicId, partition)
 	t.commitLogs[key] = log
 }
 
-func (t *TopicStore) GetCommitLog(topic string, partition int32) commitlog.ICommitLog {
+func (t *TopicStore) GetCommitLog(topicId uuid.UUID, partition int32) commitlog.ICommitLog {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.commitLogs[fmt.Sprintf("%s-%d", topic, partition)]
+	return t.commitLogs[fmt.Sprintf("%s-%d", topicId.String(), partition)]
 }
 func (t *TopicStore) AddTopic(topicData topic.CreateTopicResponseData) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if _, ok := t.topics[string(topicData.Name)]; ok {
+	if _, ok := t.topics[topicData.TopicId]; ok {
 		return constant.CreateError(constant.ErrTopicAlreadyExists)
 	}
-	t.topics[string(topicData.Name)] = topicData
+	t.topics[topicData.TopicId] = topicData
+	t.topicNames[string(topicData.Name)] = topicData.TopicId
 	return nil
 }
 
-func (t *TopicStore) GetTopic(name string) (*topic.CreateTopicResponseData, error) {
+func (t *TopicStore) GetTopic(topicId uuid.UUID) (*topic.CreateTopicResponseData, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	topicData, ok := t.topics[name]
+	topicData, ok := t.topics[topicId]
 	if !ok {
 		return nil, constant.CreateError(constant.ErrInvalidTopicException)
 	}
 	return &topicData, nil
 }
 
-func (t *TopicStore) GetTopicMetadata(names []string) ([]admin.MetadataResponseTopic, error) {
+func (t *TopicStore) GetTopicByName(topicName string) (*topic.CreateTopicResponseData, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	topicId, ok := t.topicNames[topicName]
+	if !ok {
+		return nil, fmt.Errorf("topic name %s not found", topicName)
+	}
+	return t.GetTopic(topicId)
+}
+
+func (t *TopicStore) GetTopicMetadataByNames(topicNames []string) ([]admin.MetadataResponseTopic, error) {
+	topicIds := make([]uuid.UUID, 0)
+	for _, topicName := range topicNames {
+		topicId, ok := t.topicNames[topicName]
+		if !ok {
+			continue
+		}
+		topicIds = append(topicIds, topicId)
+	}
+	return t.GetTopicMetadata(topicIds)
+}
+
+func (t *TopicStore) GetTopicMetadata(topicIds []uuid.UUID) ([]admin.MetadataResponseTopic, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	var topics []admin.MetadataResponseTopic
-	for _, name := range names {
-		topicData, ok := t.topics[name]
+	for _, topicId := range topicIds {
+		topicData, ok := t.topics[topicId]
 		if !ok {
 			return nil, constant.CreateError(constant.ErrInvalidTopicException)
 		}
@@ -99,15 +125,17 @@ func (t *TopicStore) GetTopicMetadata(names []string) ([]admin.MetadataResponseT
 func (t *TopicStore) AddTopicMetadata(metaData *TopicMeta) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if _, ok := t.topics[(metaData.Name)]; ok {
+
+	var topicId uuid.UUID
+	var err error
+	if topicId, err = uuid.FromString(metaData.TopicId); err != nil {
+		return fmt.Errorf("topic id %s is not a valid uuid", metaData.TopicId)
+	}
+	if _, ok := t.topics[topicId]; ok {
 		return constant.CreateError(constant.ErrTopicAlreadyExists)
 	}
 
-	topicId, err := uuid.FromString(metaData.TopicId)
-	if err != nil {
-		return fmt.Errorf("topic id %s is not a valid uuid", metaData.TopicId)
-	}
-	t.topics[(metaData.Name)] = topic.CreateTopicResponseData{
+	t.topics[topicId] = topic.CreateTopicResponseData{
 		Name:              types.CompactString(metaData.Name),
 		TopicId:           topicId,
 		NumPartitions:     metaData.NumPartitions,

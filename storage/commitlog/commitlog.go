@@ -18,7 +18,21 @@ const (
 	suffixCommitLogFile = ".log"
 )
 
+type RecordsRegion struct {
+	File       *os.File
+	FileOffset int64 // byte position in file where batch envelope starts
+	Size       int64 // total bytes (header + data) to send
+	LEO        int64 // log end offset at time of read
+	LogStart   int64 // oldest offset in this log
+}
+
 type ICommitLog interface {
+	// AppendRaw writes raw byte data directly to the commit log without any message framing or metadata.
+	// This is intended for advanced use cases where the caller manages message serialization and framing.
+	// The recordCount parameter indicates how many messages are contained in the data, which can be used for indexing.
+	// It returns the base offset of the first message in the batch, which can be used for subsequent reads.
+	AppendRaw(data []byte, recordCount int32) (baseOffset int64, err error)
+
 	// Append writes a batch of messages to the commit log.
 	// It returns the starting offset of the first message in the batch.
 	// Messages are assigned sequential offsets starting from the returned offset.
@@ -29,6 +43,8 @@ type ICommitLog interface {
 	// It reads up to maxBytes of message data.
 	// Returns an empty slice if the offset is out of range.
 	Read(offset int64, maxBytes int) ([]Message, error)
+
+	FindRecords(fetchOffset int64, maxBytes int64) (*RecordsRegion, error)
 
 	// TruncateTo removes all messages with offsets greater than or equal to the given offset.
 	// This is useful for log compaction and recovery scenarios.
@@ -55,6 +71,64 @@ type commitLog struct {
 	isClosed        bool
 	nextOffset      int64
 	mu              *sync.RWMutex
+}
+
+func (c *commitLog) FindRecords(fetchOffset int64, maxBytes int64) (*RecordsRegion, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.isClosed {
+		return nil, nil
+	}
+
+	if fetchOffset >= c.nextOffset {
+		return nil, nil
+	}
+
+	segIdx := c.findSegmentByOffset(fetchOffset)
+	if segIdx < 0 {
+		return nil, nil
+	}
+
+	seg := c.segments[segIdx]
+	filePos, size, err := seg.FindRawRegion(fetchOffset, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &RecordsRegion{
+		File:       seg.logFile,
+		FileOffset: filePos,
+		Size:       size,
+		LEO:        c.nextOffset,
+		LogStart:   c.segments[0].BaseOffset,
+	}, nil
+}
+
+func (c *commitLog) AppendRaw(data []byte, recordCount int32) (baseOffset int64, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.isClosed {
+		return 0, errors.New("commitLog is already closed")
+	}
+	if len(c.segments) == 0 {
+		return 0, nil
+	}
+
+	if c.activeSegment.IsFull() {
+		newSegment, err := NewSegment(c.dir, c.activeSegment.NextOffset(), c.commitLogConfig)
+		if err != nil {
+			return 0, err
+		}
+		c.segments = append(c.segments, newSegment)
+		c.activeSegment = newSegment
+	}
+	startOffset := c.nextOffset
+	if err := c.activeSegment.AppendRaw(startOffset, data); err != nil {
+		return 0, err
+	}
+	c.nextOffset += int64(recordCount)
+	return startOffset, nil
 }
 
 func (c *commitLog) Append(messages []Message) (offset int64, err error) {

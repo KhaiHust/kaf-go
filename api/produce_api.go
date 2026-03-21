@@ -3,15 +3,13 @@ package api
 import (
 	"log/slog"
 	"net"
-	"time"
 
 	"github.com/KhaiHust/kaf-go/common"
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/producer"
-	"github.com/KhaiHust/kaf-go/protocol/types"
 	"github.com/KhaiHust/kaf-go/storage"
-	"github.com/KhaiHust/kaf-go/storage/commitlog"
+	"github.com/gofrs/uuid/v5"
 )
 
 type partitionResult struct {
@@ -21,6 +19,7 @@ type partitionResult struct {
 }
 type topicResult struct {
 	name       string
+	topicId    uuid.UUID
 	partitions []partitionResult
 }
 
@@ -34,7 +33,8 @@ func HandleProduceApiKeys(conn net.Conn, header *protocol.RequestHeader, r *prot
 	var topicResults []topicResult
 	for _, topic := range produceRequest.TopicData {
 		toResult := &topicResult{
-			name: topic.Name.String(),
+			name:    topic.Name.String(),
+			topicId: topic.TopicId,
 		}
 
 		for _, partition := range topic.PartitionData {
@@ -52,25 +52,15 @@ func HandleProduceApiKeys(conn net.Conn, header *protocol.RequestHeader, r *prot
 				toResult.partitions = append(toResult.partitions, *pr)
 				continue
 			}
-			messages := make([]commitlog.Message, len(batch.Records))
-			for i, record := range batch.Records {
-				messages[i] = commitlog.Message{
-					Key:   record.Key,
-					Value: record.Value,
-					Timestamp: time.Unix(0,
-						batch.FirstTimestamp+record.TimestampDelta.Long()*int64(time.Millisecond)),
-					Headers: record.Headers,
-				}
-			}
 
 			//write to commit log
-			partitionCommitLog := topicStore.GetCommitLog(string(topic.Name), partition.Index)
+			partitionCommitLog := topicStore.GetCommitLog(topic.TopicId, partition.Index)
 			if partitionCommitLog == nil {
 				pr.errorCode = constant.ErrUnknownTopicOrPartition
 				toResult.partitions = append(toResult.partitions, *pr)
 				continue
 			}
-			pr.baseOffset, err = partitionCommitLog.Append(messages)
+			pr.baseOffset, err = partitionCommitLog.AppendRaw(partition.Records, int32(len(batch.Records)))
 			if err != nil {
 				pr.errorCode = constant.ErrKafkaStorageError
 			}
@@ -92,7 +82,7 @@ func writeProduceApiResponse(conn net.Conn, header *protocol.RequestHeader, resu
 
 	for _, tr := range results {
 		topicResp := producer.TopicProduceResponse{
-			Name: types.NewCompactString(tr.name),
+			TopicId: tr.topicId,
 		}
 		for _, pr := range tr.partitions {
 			var errMsg *string

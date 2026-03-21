@@ -2,6 +2,7 @@ package commitlog
 
 import (
 	"bufio"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,18 @@ import (
 	"time"
 
 	"github.com/KhaiHust/kaf-go/config"
+)
+
+// RecordBatch wire format offsets — all reads relative to batch start
+const (
+	offsetBaseOffset      = 0  // int64, 8 bytes
+	offsetBatchLength     = 8  // int32, 4 bytes
+	offsetLastOffsetDelta = 23 // int32, 4 bytes — only read in slow path
+
+	// 17 bytes: enough for baseOffset + batchLength (fast path)
+	headerSizeUpToMagic = 17
+	// 27 bytes: adds CRC(4) + Attributes(2) + LastOffsetDelta(4)
+	headerSizeWithDelta = 27
 )
 
 type Segment struct {
@@ -32,6 +45,16 @@ type Segment struct {
 	newestTimestamp     time.Time
 
 	mu *sync.RWMutex
+}
+
+// batchMeta holds the minimum info needed for the search algorithm.
+// Mirrors Kafka's lazy FileChannelRecordBatch — lastOffset is only
+// populated when the slow path is triggered.
+type batchMeta struct {
+	filePos    int64 // byte position of this batch in the log file
+	baseOffset int64 // always populated (17-byte read)
+	totalLen   int64 // 12 + BatchLength (12 = 8 BaseOffset + 4 BatchLength)
+	lastOffset int64 // populated lazily on slow path (-1 = not loaded)
 }
 
 // NewSegment creates a new segment with the given base offset and configuration.
@@ -103,6 +126,150 @@ func NewSegment(dir string, baseOffset int64, segmentConfig *config.CommitLogCon
 		mu:            new(sync.RWMutex),
 	}, nil
 
+}
+
+// AppendRaw patches the broker-assigned BaseOffset into the RecordBatch,
+// then writes the bytes directly to disk.
+//
+// The RecordBatch CRC covers from Attributes onward (byte 21+), so
+// patching BaseOffset (bytes 0-7) does NOT invalidate the CRC.
+//
+// On-disk layout — exactly what the consumer wire format expects:
+//
+//	[BaseOffset: 8B][BatchLength: 4B][PartLeaderEpoch: 4B][Magic: 1B]
+//	[CRC: 4B][Attributes: 2B]...[Records]
+//
+// No envelope, no wrapper — the file IS the Kafka log segment.
+func (s *Segment) AppendRaw(baseOffset int64, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(data) < 8 {
+		return fmt.Errorf("Record Batch data too short to contain BaseOffset")
+	}
+
+	binary.BigEndian.PutUint64(data[0:8], uint64(baseOffset))
+
+	position, err := s.logFile.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+
+	if _, err = s.logFile.Write(data); err != nil {
+		return err
+	}
+
+	s.currentSize += int64(len(data))
+
+	//Index: maps baseOffset => file position of this RecordBatch
+	if s.offsetIndex.EntryCount() == 0 || position-s.lastIndexedPosition >= s.indexInterval {
+		if err = s.offsetIndex.Append(baseOffset, int(position)); err != nil {
+			return fmt.Errorf("failed to append to offset index: %v", err)
+		}
+		if err = s.timeIndex.Append(baseOffset, time.Now().UnixNano()); err != nil {
+			return fmt.Errorf("failed to append to time index: %v", err)
+		}
+		s.lastIndexedPosition = position
+	}
+
+	return nil
+
+}
+
+// FindRawRegion implements the KAFKA-18989 algorithm:
+//
+//	Fast path (17-byte read per batch):
+//	  if nextBatch.baseOffset >= fetchOffset
+//	    → fetchOffset lives in current batch — return it immediately
+//
+//	Slow path (27-byte read, only when fast path is inconclusive):
+//	  read LastOffsetDelta to compute lastOffset
+//	  if lastOffset >= fetchOffset → return current batch
+//
+//	After the start batch is found, accumulate subsequent batches up to maxBytes.
+//
+// Record data never enters userspace — only headers are scanned.
+func (s *Segment) FindRawRegion(fetchOffset int64, maxBytes int64) (filePos int64, size int64, err error) {
+	s.mu.RUnlock()
+	defer s.mu.RUnlock()
+
+	indexPos, err := s.offsetIndex.Lookup(fetchOffset)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	fileInfo, err := s.logFile.Stat()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	fileSize := fileInfo.Size()
+
+	pos := int64(indexPos)
+	startPos := int64(-1)
+
+	var preMeta *batchMeta
+
+	for pos+headerSizeUpToMagic <= fileSize {
+		curr, err := s.readBatchMeta17(pos)
+		if err != nil {
+			return 0, 0, err
+		}
+
+		if curr.baseOffset >= fetchOffset {
+			if preMeta != nil {
+				startPos = preMeta.filePos
+			} else {
+				startPos = curr.filePos
+			}
+			break
+		}
+
+		lastOffset, err := s.readLastOffset(curr)
+		if err != nil {
+			return 0, 0, err
+		}
+
+		curr.lastOffset = lastOffset
+		if lastOffset >= fetchOffset {
+			startPos = curr.filePos
+		}
+
+		preMeta = curr
+		pos = curr.filePos + curr.totalLen
+	}
+
+	if startPos < 0 {
+		if preMeta != nil {
+			startPos = preMeta.filePos
+		} else {
+			return 0, 0, nil
+		}
+	}
+
+	pos = startPos
+	accumulated := int64(0)
+	for pos+headerSizeUpToMagic <= fileSize {
+		curr, err := s.readBatchMeta17(pos)
+		if err != nil {
+			return 0, 0, err
+		}
+
+		if maxBytes > 0 && accumulated > 0 && accumulated+curr.totalLen > maxBytes {
+			break
+		}
+
+		accumulated += curr.totalLen
+		pos += curr.totalLen
+		if maxBytes > 0 && accumulated > maxBytes {
+			break
+		}
+	}
+	if accumulated == 0 {
+		return 0, 0, nil
+	}
+
+	return startPos, accumulated, nil
 }
 
 // Append writes a batch of messages to the segment.
@@ -307,4 +474,48 @@ func (s *Segment) Delete() error {
 	_ = os.Remove(timeIndexFilePath)
 
 	return nil
+}
+
+// readBatchMeta17 reads 17 bytes and returns the batch's position,
+// baseOffset, and totalLen. Equivalent to Kafka's nextBatch() which
+// reads HEADER_SIZE_UP_TO_MAGIC bytes into a lazy wrapper.
+func (s *Segment) readBatchMeta17(pos int64) (*batchMeta, error) {
+	var buf [headerSizeUpToMagic]byte
+	if _, err := s.logFile.ReadAt(buf[:], pos); err != nil {
+		return nil, fmt.Errorf("read batch header at %d: %w", pos, err)
+	}
+
+	baseOffset := int64(binary.BigEndian.Uint64(buf[offsetBaseOffset : offsetBaseOffset+8]))
+	batchLength := int32(binary.BigEndian.Uint32(buf[offsetBatchLength : offsetBatchLength+4]))
+
+	// totalLen = 8 (BaseOffset) + 4 (BatchLength field) + batchLength value
+	// This matches Kafka: sizeInBytes() = LOG_OVERHEAD + batchLength
+	//   where LOG_OVERHEAD = OFFSET_OFFSET(8) + SIZE_OFFSET(4) = 12
+	totalLen := int64(12) + int64(batchLength)
+
+	return &batchMeta{
+		filePos:    pos,
+		baseOffset: baseOffset,
+		totalLen:   totalLen,
+		lastOffset: -1, // not loaded yet
+	}, nil
+}
+
+// readLastOffset reads the additional 10 bytes needed to compute lastOffset.
+// Equivalent to Kafka's FileChannelRecordBatch.loadBatchHeader() which
+// reads headerSize() bytes — triggered only in the slow path.
+//
+//	bytes 17-20: CRC        (4B, not needed for offset but in the read range)
+//	bytes 21-22: Attributes (2B, not needed)
+//	bytes 23-26: LastOffsetDelta (4B) ← this is what we need
+func (s *Segment) readLastOffset(m *batchMeta) (int64, error) {
+	// Read bytes 17-26 (10 bytes) to reach LastOffsetDelta at byte 23
+	var buf [10]byte
+	if _, err := s.logFile.ReadAt(buf[:], m.filePos+headerSizeUpToMagic); err != nil {
+		return 0, fmt.Errorf("read lastOffsetDelta at %d: %w", m.filePos, err)
+	}
+
+	// LastOffsetDelta is at absolute byte 23 = relative byte 23-17 = 6
+	lastOffsetDelta := int32(binary.BigEndian.Uint32(buf[6:10]))
+	return m.baseOffset + int64(lastOffsetDelta), nil
 }
