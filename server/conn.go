@@ -59,6 +59,16 @@ func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reade
 		if err != nil {
 			slog.Error("handle produce failed: %v", err)
 		}
+	case constant.ApiKeyFetch:
+		err := api.HandleFetchApiKeys(c.conn, header, reader, c.server.topicStore)
+		if err != nil {
+			slog.Error("handle fetch failed: %v", err)
+		}
+	case constant.ApiKeyListOffsets:
+		err := api.HandleListOffsetsApi(c.conn, header, reader, c.server.topicStore)
+		if err != nil {
+			slog.Error("handle list offsets failed: %v", err)
+		}
 
 	case constant.ApiKeyApiVersions:
 		responseHeader, response, err := api.HandleApiVersionApi(header, reader)

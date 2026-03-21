@@ -63,34 +63,44 @@ func main() {
 		}
 	}
 
-	// Fetch data from topic
-	//fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	//defer fetchCancel()
-	//
-	//target := 100
-	//received := 0
-	//for received < target {
-	//	fetches := client.PollFetches(fetchCtx)
-	//
-	//	if fetches.IsClientClosed() {
-	//		log.Println("client closed while fetching")
-	//		break
-	//	}
-	//	if err := fetchCtx.Err(); err != nil {
-	//		log.Printf("fetch timeout: %v", err)
-	//		break
-	//	}
-	//
-	//	fetches.EachError(func(topic string, partition int32, err error) {
-	//		log.Printf("fetch error topic=%s partition=%d err=%v", topic, partition, err)
-	//	})
-	//
-	//	fetches.EachRecord(func(r *kgo.Record) {
-	//		fmt.Printf("FETCH topic=%s partition=%d offset=%d key=%s value=%s\n",
-	//			r.Topic, r.Partition, r.Offset, string(r.Key), string(r.Value))
-	//		received++
-	//	})
-	//}
-	//
-	//fmt.Printf("done fetching: %d records\n", received)
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers("localhost:9092"),
+		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
+		kgo.ConsumeTopics("orders"),                       // ← subscribe
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()), // ← from offset 0
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer consumer.Close()
+	//Fetch data from topic
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 1000*time.Second)
+	defer fetchCancel()
+
+	target := 100
+	received := 0
+	for received < target {
+		fetches := client.PollFetches(fetchCtx)
+
+		if fetches.IsClientClosed() {
+			log.Println("client closed while fetching")
+			break
+		}
+		if err := fetchCtx.Err(); err != nil {
+			log.Printf("fetch timeout: %v", err)
+			break
+		}
+
+		fetches.EachError(func(topic string, partition int32, err error) {
+			log.Printf("fetch error topic=%s partition=%d err=%v", topic, partition, err)
+		})
+
+		fetches.EachRecord(func(r *kgo.Record) {
+			fmt.Printf("FETCH topic=%s partition=%d offset=%d key=%s value=%s\n",
+				r.Topic, r.Partition, r.Offset, string(r.Key), string(r.Value))
+			received++
+		})
+	}
+
+	fmt.Printf("done fetching: %d records\n", received)
 }
