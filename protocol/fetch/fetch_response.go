@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/types"
 	"github.com/gofrs/uuid/v5"
@@ -16,6 +17,15 @@ type FetchResponse struct {
 	NodeEndpoints []NodeEndpoint
 }
 
+func (f *FetchResponse) Decode(r *protocol.Reader) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (f *FetchResponse) ApiKey() int16 {
+	return constant.ApiKeyFetch
+}
+
 type FetchTopicResponse struct {
 	TopicId    uuid.UUID
 	Partitions []FetchPartitionResponse
@@ -29,7 +39,7 @@ type FetchPartitionResponse struct {
 	LogStartOffset       int64
 	AbortedTransactions  []AbortedTransaction
 	PreferredReadReplica int32
-	Records              []byte // raw COMPACT_RECORDS bytes, nil = null records
+	Records              types.CompactRecords // raw record bytes (COMPACT_RECORDS v13+), nil = null
 
 	// tag: 0
 	DivergingEpoch *DivergingEpoch
@@ -85,6 +95,53 @@ func (f *FetchResponse) Encode(w *protocol.Writer) error {
 	return f.encodeTaggedFields(w)
 }
 
+// EncodeHeader writes the response-level fields and opens the topics compact array.
+// topicsLen must equal the number of FetchTopicResponse items that will follow.
+func (f *FetchResponse) EncodeHeader(w *protocol.Writer, topicsLen int) {
+	w.WriteInt32(f.ThrottleTimeMs)
+	w.WriteInt16(f.ErrorCode)
+	w.WriteInt32(f.SessionId)
+	w.WriteCompactArrayLen(topicsLen)
+}
+
+// EncodeFooter writes the response-level tagged fields (node_endpoints).
+func (f *FetchResponse) EncodeFooter(w *protocol.Writer) error {
+	return f.encodeTaggedFields(w)
+}
+
+// EncodePartitionPreRecords writes all partition fields up to and including the
+// COMPACT_RECORDS length prefix. recordsSize < 0 encodes a null records field.
+// The actual record bytes must follow immediately in the stream.
+func (p *FetchPartitionResponse) EncodePartitionPreRecords(w *protocol.Writer, recordsSize int64) {
+	w.WriteInt32(p.PartitionIndex)
+	w.WriteInt16(p.ErrorCode)
+	w.WriteInt64(p.HighWatermark)
+	w.WriteInt64(p.LastStableOffset)
+	w.WriteInt64(p.LogStartOffset)
+
+	w.WriteCompactArrayLen(len(p.AbortedTransactions))
+	for _, at := range p.AbortedTransactions {
+		w.WriteInt64(at.ProducerId)
+		w.WriteInt64(at.FirstOffset)
+		w.WriteEmptyTaggedFields()
+	}
+
+	w.WriteInt32(p.PreferredReadReplica)
+
+	// COMPACT_RECORDS length prefix: uvarint(N+1), or uvarint(0) for null
+	if recordsSize < 0 {
+		w.WriteUVarInt(0)
+	} else {
+		w.WriteUVarInt(uint64(recordsSize + 1))
+	}
+}
+
+// EncodePartitionPostRecords writes the partition-level tagged fields that
+// follow the records data in the wire format.
+func (p *FetchPartitionResponse) EncodePartitionPostRecords(w *protocol.Writer) error {
+	return p.encodeTaggedFields(w)
+}
+
 func (f *FetchResponse) encodeTaggedFields(w *protocol.Writer) error {
 	if len(f.NodeEndpoints) == 0 {
 		w.WriteEmptyTaggedFields()
@@ -101,11 +158,10 @@ func (f *FetchResponse) encodeTaggedFields(w *protocol.Writer) error {
 	for i := range f.NodeEndpoints {
 		f.NodeEndpoints[i].encode(tmp)
 	}
-	tmp.WriteEmptyTaggedFields() // node_endpoint array has no own tagged fields
 
 	payload := tmp.Bytes()
 	w.WriteUVarInt(uint64(len(payload)))
-	w.WriteBytes(payload)
+	w.WriteRaw(payload)
 	return nil
 }
 
@@ -144,13 +200,8 @@ func (p *FetchPartitionResponse) encode(w *protocol.Writer) error {
 
 	w.WriteInt32(p.PreferredReadReplica)
 
-	// records — COMPACT_RECORDS: UVarInt(len+1) then raw bytes; null = 0x00
-	if p.Records == nil {
-		w.WriteUVarInt(0)
-	} else {
-		w.WriteUVarInt(uint64(len(p.Records)) + 1)
-		w.WriteBytes(p.Records)
-	}
+	// records — COMPACT_RECORDS (v13+): uvarint(N+1), or uvarint(0) for null
+	w.WriteCompactRecords(p.Records)
 
 	return p.encodeTaggedFields(w)
 }
@@ -176,7 +227,7 @@ func (p *FetchPartitionResponse) encodeTaggedFields(w *protocol.Writer) error {
 		tmp.WriteInt64(p.DivergingEpoch.EndOffset)
 		payload := tmp.Bytes()
 		w.WriteUVarInt(uint64(len(payload)))
-		w.WriteBytes(payload)
+		w.WriteRaw(payload)
 	}
 
 	if p.CurrentLeader != nil {
@@ -186,7 +237,7 @@ func (p *FetchPartitionResponse) encodeTaggedFields(w *protocol.Writer) error {
 		tmp.WriteInt32(p.CurrentLeader.LeaderEpoch)
 		payload := tmp.Bytes()
 		w.WriteUVarInt(uint64(len(payload)))
-		w.WriteBytes(payload)
+		w.WriteRaw(payload)
 	}
 
 	if p.SnapshotId != nil {
@@ -196,7 +247,7 @@ func (p *FetchPartitionResponse) encodeTaggedFields(w *protocol.Writer) error {
 		tmp.WriteInt32(p.SnapshotId.Epoch)
 		payload := tmp.Bytes()
 		w.WriteUVarInt(uint64(len(payload)))
-		w.WriteBytes(payload)
+		w.WriteRaw(payload)
 	}
 
 	return nil

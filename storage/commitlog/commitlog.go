@@ -44,6 +44,9 @@ type ICommitLog interface {
 	// Returns an empty slice if the offset is out of range.
 	Read(offset int64, maxBytes int) ([]Message, error)
 
+	// FindRecords locates the file region containing messages starting from the given fetchOffset.
+	// It returns a RecordsRegion which includes the file, byte offset, size of the region, and log end offset (LEO) at the time of the read.
+	// This method is optimized for zero-copy reads, allowing the caller to directly send the file region over the network without additional copying.
 	FindRecords(fetchOffset int64, maxBytes int64) (*RecordsRegion, error)
 
 	// TruncateTo removes all messages with offsets greater than or equal to the given offset.

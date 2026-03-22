@@ -190,7 +190,7 @@ func (s *Segment) AppendRaw(baseOffset int64, data []byte) error {
 //
 // Record data never enters userspace — only headers are scanned.
 func (s *Segment) FindRawRegion(fetchOffset int64, maxBytes int64) (filePos int64, size int64, err error) {
-	s.mu.RUnlock()
+	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	indexPos, err := s.offsetIndex.Lookup(fetchOffset)
@@ -233,6 +233,7 @@ func (s *Segment) FindRawRegion(fetchOffset int64, maxBytes int64) (filePos int6
 		curr.lastOffset = lastOffset
 		if lastOffset >= fetchOffset {
 			startPos = curr.filePos
+			break
 		}
 
 		preMeta = curr
@@ -428,25 +429,69 @@ func (s *Segment) NextOffset() int64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if _, err := s.logFile.Seek(0, io.SeekStart); err != nil {
+	fileInfo, err := s.logFile.Stat()
+	if err != nil {
 		return s.BaseOffset
 	}
-	reader := bufio.NewReader(s.logFile)
+	fileSize := fileInfo.Size()
+	pos := int64(0)
+	lastBaseOffset := int64(-1)
+	lastTotalLen := int64(0)
 
-	lastOffset := s.BaseOffset - 1
-
-	for {
-		msg, _, err := DeserializeMessage(reader)
-		if err == io.EOF {
+	for pos+headerSizeUpToMagic <= fileSize {
+		var buf [headerSizeWithDelta]byte
+		n, err := s.logFile.ReadAt(buf[:], pos)
+		if err != nil || n < headerSizeWithDelta {
 			break
 		}
-		if err != nil {
+
+		baseOffset := int64(binary.BigEndian.Uint64(buf[0:8]))
+		batchLength := int64(binary.BigEndian.Uint32(buf[8:12]))
+
+		totalLen := int64(12) + batchLength
+		if totalLen <= 0 || pos+totalLen > fileSize {
 			break
 		}
-		lastOffset = msg.Offset
+
+		lastOffsetDelta := int32(binary.BigEndian.Uint32(buf[23:27]))
+		lastBaseOffset = baseOffset
+		lastTotalLen = int64(lastOffsetDelta)
+		_ = lastTotalLen
+
+		pos += totalLen
 	}
 
-	return lastOffset + 1
+	if lastBaseOffset < 0 {
+		return s.BaseOffset
+	}
+	return s.scanLastOffset(fileSize)
+}
+
+func (s *Segment) scanLastOffset(fileSize int64) int64 {
+	pos := int64(0)
+	nextOffset := s.BaseOffset
+
+	for pos+headerSizeWithDelta <= fileSize {
+		var buf [headerSizeWithDelta]byte
+		n, err := s.logFile.ReadAt(buf[:], pos)
+		if err != nil || n < headerSizeWithDelta {
+			break
+		}
+
+		baseOffset := int64(binary.BigEndian.Uint64(buf[0:8]))
+		batchLength := int32(binary.BigEndian.Uint32(buf[8:12]))
+		lastOffsetDelta := int32(binary.BigEndian.Uint32(buf[23:27]))
+		totalLen := int64(12) + int64(batchLength)
+
+		if totalLen <= 0 || pos+totalLen > fileSize {
+			break
+		}
+
+		nextOffset = baseOffset + int64(lastOffsetDelta) + 1
+		pos += totalLen
+	}
+
+	return nextOffset
 }
 
 // NewestTimestamp returns the timestamp of the most recently appended message in the segment.

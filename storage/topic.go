@@ -70,10 +70,16 @@ func (t *TopicStore) GetTopicByName(topicName string) (*topic.CreateTopicRespons
 	if !ok {
 		return nil, fmt.Errorf("topic name %s not found", topicName)
 	}
-	return t.GetTopic(topicId)
+	topicData, ok := t.topics[topicId]
+	if !ok {
+		return nil, constant.CreateError(constant.ErrInvalidTopicException)
+	}
+	return &topicData, nil
 }
 
 func (t *TopicStore) GetTopicMetadataByNames(topicNames []string) ([]admin.MetadataResponseTopic, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	topicIds := make([]uuid.UUID, 0)
 	for _, topicName := range topicNames {
 		topicId, ok := t.topicNames[topicName]
@@ -82,7 +88,38 @@ func (t *TopicStore) GetTopicMetadataByNames(topicNames []string) ([]admin.Metad
 		}
 		topicIds = append(topicIds, topicId)
 	}
-	return t.GetTopicMetadata(topicIds)
+	var topics []admin.MetadataResponseTopic
+	for _, topicId := range topicIds {
+		topicData, ok := t.topics[topicId]
+		if !ok {
+			return nil, constant.CreateError(constant.ErrInvalidTopicException)
+		}
+
+		var metadataResponsePartitions []admin.MetadataResponsePartition
+		for idx := int32(0); idx < topicData.NumPartitions; idx++ {
+			metadataResponsePartitions = append(metadataResponsePartitions, admin.MetadataResponsePartition{
+
+				ErrorCode:       0,
+				PartitionIndex:  idx,
+				LeaderID:        1,
+				LeaderEpoch:     1,
+				ReplicaNodes:    []int32{1},
+				IsrNodes:        []int32{1},
+				OfflineReplicas: []int32{1},
+			},
+			)
+		}
+
+		topics = append(topics, admin.MetadataResponseTopic{
+			ErrorCode:                 0,
+			Name:                      common.StringPtr(string(topicData.Name)),
+			TopicID:                   topicData.TopicId,
+			IsInternal:                false,
+			Partitions:                metadataResponsePartitions,
+			TopicAuthorizedOperations: 0,
+		})
+	}
+	return topics, nil
 }
 
 func (t *TopicStore) GetTopicMetadata(topicIds []uuid.UUID) ([]admin.MetadataResponseTopic, error) {
@@ -142,5 +179,6 @@ func (t *TopicStore) AddTopicMetadata(metaData *TopicMeta) error {
 		ReplicationFactor: int16(metaData.ReplicationFactor),
 		ErrorCode:         0,
 	}
+	t.topicNames[metaData.Name] = topicId
 	return nil
 }

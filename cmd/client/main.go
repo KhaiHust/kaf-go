@@ -80,7 +80,7 @@ func main() {
 	target := 100
 	received := 0
 	for received < target {
-		fetches := client.PollFetches(fetchCtx)
+		fetches := consumer.PollFetches(fetchCtx)
 
 		if fetches.IsClientClosed() {
 			log.Println("client closed while fetching")

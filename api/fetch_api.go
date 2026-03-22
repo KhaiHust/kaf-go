@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"os"
 
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol"
@@ -12,9 +13,19 @@ import (
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
 )
 
-type partitionRegion struct {
-	partResp *fetch.FetchPartitionResponse
-	region   *commitlog.RecordsRegion
+// ioSegment is either an in-memory buffer or a file region (for zero-copy).
+type ioSegment struct {
+	data       []byte
+	file       *os.File
+	fileOffset int64
+	fileSize   int64
+}
+
+func (s *ioSegment) size() int64 {
+	if s.file != nil {
+		return s.fileSize
+	}
+	return int64(len(s.data))
 }
 
 func HandleFetchApiKeys(conn net.Conn, header *protocol.RequestHeader, r *protocol.Reader, topicStore *storage.TopicStore) error {
@@ -23,107 +34,138 @@ func HandleFetchApiKeys(conn net.Conn, header *protocol.RequestHeader, r *protoc
 		return err
 	}
 
-	var topicResps []fetch.FetchTopicResponse
-	var allRegions []*commitlog.RecordsRegion
-	totalRecordsBytes := int64(0)
+	type partResult struct {
+		pr     fetch.FetchPartitionResponse
+		region *commitlog.RecordsRegion
+	}
+	type topicResult struct {
+		topicId [16]byte
+		parts   []partResult
+	}
 
-	for _, topic := range fetchRequest.Topics {
-		topicResp := fetch.FetchTopicResponse{
-			TopicId: topic.TopicId,
-		}
-
-		for _, part := range topic.Partitions {
+	var topicResults []topicResult
+	for _, t := range fetchRequest.Topics {
+		tr := topicResult{topicId: t.TopicId}
+		for _, part := range t.Partitions {
 			pr := fetch.FetchPartitionResponse{
 				PartitionIndex:       part.Partition,
 				PreferredReadReplica: -1,
 			}
-			partCommitLog := topicStore.GetCommitLog(topic.TopicId, part.Partition)
-			if partCommitLog == nil {
-				pr.ErrorCode = constant.ErrUnknownTopicOrPartition // unknown topic or partition
-				allRegions = append(allRegions, nil)
-				topicResp.Partitions = append(topicResp.Partitions, pr)
-				continue
-			}
-
-			region, err := partCommitLog.FindRecords(part.FetchOffset, int64(part.PartitionMaxBytes))
-			if err != nil || region == nil {
-				allRegions = append(allRegions, nil)
+			var region *commitlog.RecordsRegion
+			cl := topicStore.GetCommitLog(t.TopicId, part.Partition)
+			if cl == nil {
+				pr.ErrorCode = constant.ErrUnknownTopicOrPartition
 			} else {
-				pr.HighWatermark = region.LEO
-				pr.LastStableOffset = region.LEO
-				pr.LogStartOffset = region.LogStart
-				allRegions = append(allRegions, region)
-				totalRecordsBytes += region.Size
+				reg, err := cl.FindRecords(part.FetchOffset, int64(part.PartitionMaxBytes))
+				if err == nil && reg != nil {
+					pr.HighWatermark = reg.LEO
+					pr.LastStableOffset = reg.LEO
+					pr.LogStartOffset = reg.LogStart
+					region = reg
+				}
 			}
-			topicResp.Partitions = append(topicResp.Partitions, pr)
+			tr.parts = append(tr.parts, partResult{pr, region})
 		}
-		topicResps = append(topicResps, topicResp)
+		topicResults = append(topicResults, tr)
 	}
 
-	resp := &fetch.FetchResponse{
-		SessionId: fetchRequest.SessionId,
-		Responses: topicResps,
-	}
-
+	// Build alternating in-memory / file segments.
+	var segs []ioSegment
 	w := protocol.NewWriter(512)
-	if err := resp.Encode(w); err != nil {
+
+	// snapshot flushes w into a bytes segment and resets w.
+	snapshot := func() {
+		b := w.Bytes()
+		if len(b) == 0 {
+			return
+		}
+		cp := make([]byte, len(b))
+		copy(cp, b)
+		segs = append(segs, ioSegment{data: cp})
+		w.Reset()
+	}
+
+	resp := fetch.FetchResponse{SessionId: fetchRequest.SessionId}
+	resp.EncodeHeader(w, len(topicResults))
+
+	for _, tr := range topicResults {
+		w.WriteUUID(tr.topicId)
+		w.WriteCompactArrayLen(len(tr.parts))
+
+		for _, p := range tr.parts {
+			if p.region != nil {
+				p.pr.EncodePartitionPreRecords(w, p.region.Size)
+				snapshot()
+				segs = append(segs, ioSegment{
+					file:       p.region.File,
+					fileOffset: p.region.FileOffset,
+					fileSize:   p.region.Size,
+				})
+			} else {
+				p.pr.EncodePartitionPreRecords(w, -1)
+			}
+			if err := p.pr.EncodePartitionPostRecords(w); err != nil {
+				return err
+			}
+		}
+		w.WriteEmptyTaggedFields() // topic-level tagged fields
+	}
+
+	if err := resp.EncodeFooter(w); err != nil {
 		return err
 	}
+	snapshot()
 
-	// Frame: [4-byte total payload size][encoded header]
-	// Total = encoded header bytes + all record regions
-	headerBytes := w.Bytes()
-	//totalPayload := uint32(4 + len(headerBytes) + int(totalRecordsBytes))
-	// response header (CorrelationId + optional tagged fields)
-	responseHdr := protocol.NewWriter(8)
+	// Compute total payload size.
+	totalPayload := int64(0)
+	for i := range segs {
+		totalPayload += segs[i].size()
+	}
+
+	// Encode Kafka response header.
+	rhdrW := protocol.NewWriter(8)
 	rhdr := &protocol.ResponseHeader{
 		CorrelationId: header.CorrelationId,
 		ApiKey:        header.ApiKey,
 		ApiVersion:    header.ApiVersion,
 	}
-	_ = rhdr.Encode(responseHdr)
-
-	frameSize := make([]byte, 4)
-	binary.BigEndian.PutUint32(frameSize, uint32(len(responseHdr.Bytes())+len(headerBytes))+uint32(totalRecordsBytes))
-
-	// Write frame size + response header + fetch response metadata
-	if _, err := conn.Write(frameSize); err != nil {
+	if err := rhdr.Encode(rhdrW); err != nil {
 		return err
 	}
-	if _, err := conn.Write(responseHdr.Bytes()); err != nil {
+	rhdrBytes := rhdrW.Bytes()
+
+	// Write [4-byte frame size][response header][payload segments].
+	var frameSz [4]byte
+	binary.BigEndian.PutUint32(frameSz[:], uint32(int64(len(rhdrBytes))+totalPayload))
+	if _, err := conn.Write(frameSz[:]); err != nil {
 		return err
 	}
-	if _, err := conn.Write(headerBytes); err != nil {
+	if _, err := conn.Write(rhdrBytes); err != nil {
 		return err
 	}
 
-	tc, ok := conn.(*net.TCPConn)
-	if !ok {
-		// fallback: read into memory and write
-		for _, region := range allRegions {
-			if region == nil {
-				continue
+	tc, isTCP := conn.(*net.TCPConn)
+	for _, s := range segs {
+		if s.file != nil {
+			if isTCP {
+				sr := io.NewSectionReader(s.file, s.fileOffset, s.fileSize)
+				if _, err := io.Copy(tc, sr); err != nil {
+					return err
+				}
+			} else {
+				buf := make([]byte, s.fileSize)
+				if _, err := s.file.ReadAt(buf, s.fileOffset); err != nil {
+					return err
+				}
+				if _, err := conn.Write(buf); err != nil {
+					return err
+				}
 			}
-			buf := make([]byte, region.Size)
-			if _, err := region.File.ReadAt(buf, region.FileOffset); err != nil {
+		} else {
+			if _, err := conn.Write(s.data); err != nil {
 				return err
 			}
-			if _, err := conn.Write(buf); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	for _, region := range allRegions {
-		if region == nil {
-			continue
-		}
-		sr := io.NewSectionReader(region.File, region.FileOffset, region.Size)
-		if _, err := io.Copy(tc, sr); err != nil {
-			return err
 		}
 	}
 	return nil
-
 }
