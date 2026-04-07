@@ -11,12 +11,12 @@ const (
 	MaxPayloadSize = 1024 * 1024 * 100
 )
 
-func WriteFraming(conn io.Writer, header *ResponseHeader, req Response) error {
+func WriteFraming(conn io.Writer, header *ResponseHeader, response Response) error {
 	enc := NewWriter(256)
 	if err := header.Encode(enc); err != nil {
 		return err
 	}
-	if err := req.Encode(enc); err != nil {
+	if err := response.Encode(enc); err != nil {
 		return err
 	}
 	payload := enc.Bytes()

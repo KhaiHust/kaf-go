@@ -66,6 +66,8 @@ func main() {
 	consumer, err := kgo.NewClient(
 		kgo.SeedBrokers("localhost:9092"),
 		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
+		kgo.ConsumerGroup("orders-group"),                 // ← triggers FindCoordinator
+		kgo.Balancers(kgo.RoundRobinBalancer()),           // ← default
 		kgo.ConsumeTopics("orders"),                       // ← subscribe
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()), // ← from offset 0
 	)

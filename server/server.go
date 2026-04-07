@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/KhaiHust/kaf-go/config"
+	"github.com/KhaiHust/kaf-go/coordinator"
 	"github.com/KhaiHust/kaf-go/storage"
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
 	"github.com/gofrs/uuid/v5"
@@ -23,6 +24,7 @@ type Server struct {
 	logDir     string
 	brokerIDs  []int32
 	topicStore *storage.TopicStore
+	groupStore *coordinator.GroupStore
 	listener   net.Listener
 	wg         *sync.WaitGroup
 	quit       chan struct{}
@@ -34,6 +36,7 @@ func NewServer(addr, logDir string, brokerIDs []int32) *Server {
 		logDir:     logDir,
 		brokerIDs:  brokerIDs,
 		topicStore: storage.NewTopicStore(),
+		groupStore: coordinator.NewGroupStore(),
 		quit:       make(chan struct{}),
 		wg:         new(sync.WaitGroup),
 	}

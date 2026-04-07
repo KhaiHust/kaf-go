@@ -40,6 +40,41 @@ func HandleApiVersionApi(header *protocol.RequestHeader, reader *protocol.Reader
 				MaxVersion: 13,
 			},
 			{
+				ApiKey:     constant.ApiKeyOffsetCommit,
+				MinVersion: 8,
+				MaxVersion: 8,
+			},
+			{
+				ApiKey:     constant.ApiKeyOffsetFetch,
+				MinVersion: 8,
+				MaxVersion: 8,
+			},
+			{
+				ApiKey:     constant.ApiFindCoordinator,
+				MinVersion: 6,
+				MaxVersion: 6,
+			},
+			{
+				ApiKey:     constant.ApiKeyJoinGroup,
+				MinVersion: 9,
+				MaxVersion: 9,
+			},
+			{
+				ApiKey:     constant.ApiKeyLeaveGroup,
+				MinVersion: 5,
+				MaxVersion: 5,
+			},
+			{
+				ApiKey:     constant.ApiKeyHeartbeat,
+				MinVersion: 4,
+				MaxVersion: 4,
+			},
+			{
+				ApiKey:     constant.ApiKeySyncGroup,
+				MinVersion: 5,
+				MaxVersion: 5,
+			},
+			{
 				ApiKey:     constant.ApiKeyCreateTopics,
 				MinVersion: 0,
 				MaxVersion: 7,
