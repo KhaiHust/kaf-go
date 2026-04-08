@@ -22,7 +22,7 @@ import (
 type Server struct {
 	addr       string
 	logDir     string
-	brokerIDs  []int32
+	brokerID   int32
 	topicStore *storage.TopicStore
 	groupStore *coordinator.GroupStore
 	listener   net.Listener
@@ -30,11 +30,11 @@ type Server struct {
 	quit       chan struct{}
 }
 
-func NewServer(addr, logDir string, brokerIDs []int32) *Server {
+func NewServer(addr, logDir string, brokerID int32) *Server {
 	return &Server{
 		addr:       addr,
 		logDir:     logDir,
-		brokerIDs:  brokerIDs,
+		brokerID:   brokerID,
 		topicStore: storage.NewTopicStore(),
 		groupStore: coordinator.NewGroupStore(),
 		quit:       make(chan struct{}),
