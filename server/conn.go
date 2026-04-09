@@ -11,22 +11,22 @@ import (
 )
 
 type Conn struct {
-	conn   net.Conn
-	server *Server
+	NetConn net.Conn
+	Server  *Server
 }
 
 func NewConn(conn net.Conn, server *Server) *Conn {
-	return &Conn{conn: conn, server: server}
+	return &Conn{NetConn: conn, Server: server}
 }
 
 func (c *Conn) handle() {
 	defer func() {
-		c.conn.Close()
+		c.NetConn.Close()
 		slog.Info("connection closed")
 	}()
 
 	for {
-		framing, err := protocol.ReadFraming(c.conn)
+		framing, err := protocol.ReadFraming(c.NetConn)
 		if err != nil || framing == nil {
 			return
 		}
@@ -55,53 +55,53 @@ func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reade
 	//var resp []byte
 	switch apiKey {
 	case constant.ApiKeyProduce:
-		err := api.HandleProduceApiKeys(c.conn, header, reader, c.server.topicStore)
+		err := api.HandleProduceApiKeys(c.NetConn, header, reader, c.Server.topicStore)
 		if err != nil {
 			slog.Error("handle produce failed: %v", err)
 		}
 	case constant.ApiKeyFetch:
-		err := api.HandleFetchApiKeys(c.conn, header, reader, c.server.topicStore)
+		err := api.HandleFetchApiKeys(c.NetConn, header, reader, c.Server.topicStore)
 		if err != nil {
 			slog.Error("handle fetch failed: %v", err)
 		}
 	case constant.ApiKeyListOffsets:
-		err := api.HandleListOffsetsApi(c.conn, header, reader, c.server.topicStore)
+		err := api.HandleListOffsetsApi(c.NetConn, header, reader, c.Server.topicStore)
 		if err != nil {
 			slog.Error("handle list offsets failed: %v", err)
 		}
 	case constant.ApiKeyOffsetCommit:
-		err := api.HandleOffsetCommitApi(c.conn, header, reader, c.server.groupStore)
+		err := api.HandleOffsetCommitApi(c.NetConn, header, reader, c.Server.groupStore)
 		if err != nil {
 			slog.Error("handle offset commit failed: %v", err)
 		}
 	case constant.ApiKeyOffsetFetch:
-		err := api.HandleOffsetFetchApi(c.conn, header, reader, c.server.groupStore)
+		err := api.HandleOffsetFetchApi(c.NetConn, header, reader, c.Server.groupStore)
 		if err != nil {
 			slog.Error("handle offset fetch failed: %v", err)
 		}
 	case constant.ApiFindCoordinator:
-		err := api.HandleFindCoordinatorApi(c.conn, header, reader)
+		err := api.HandleFindCoordinatorApi(c.NetConn, header, reader)
 		if err != nil {
 			slog.Error("handle find coordinator failed: %v", err)
 		}
 	case constant.ApiKeyJoinGroup:
-		err := api.HandleJoinGroupApi(c.conn, header, reader, c.server.groupStore)
+		err := api.HandleJoinGroupApi(c.NetConn, header, reader, c.Server.groupStore)
 		if err != nil {
 			slog.Error("handle join group failed: %v", err)
 		}
 
 	case constant.ApiKeyLeaveGroup:
-		err := api.HandleLeaveGroupApi(c.conn, header, reader, c.server.groupStore)
+		err := api.HandleLeaveGroupApi(c.NetConn, header, reader, c.Server.groupStore)
 		if err != nil {
 			slog.Error("handle leave group failed: %v", err)
 		}
 	case constant.ApiKeyHeartbeat:
-		err := api.HandleHeartbeatApi(c.conn, header, reader, c.server.groupStore)
+		err := api.HandleHeartbeatApi(c.NetConn, header, reader, c.Server.groupStore)
 		if err != nil {
 			slog.Error("handle heartbeat failed: %v", err)
 		}
 	case constant.ApiKeySyncGroup:
-		err := api.HandleSyncGroupApi(c.conn, header, reader, c.server.groupStore)
+		err := api.HandleSyncGroupApi(c.NetConn, header, reader, c.Server.groupStore)
 		if err != nil {
 			slog.Error("handle sync group failed: %v", err)
 		}
@@ -112,21 +112,21 @@ func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reade
 			slog.Error("handle api versions failed: %v", err)
 			return
 		}
-		if err := protocol.WriteFraming(c.conn, responseHeader, response); err != nil {
+		if err := protocol.WriteFraming(c.NetConn, responseHeader, response); err != nil {
 			slog.Error("write response failed: %v", err)
 		}
 
 	case constant.ApiKeyMetaData:
-		err := api.HandleMetaData(c.conn, header, reader, c.server.topicStore)
+		err := api.HandleMetaData(c.NetConn, c.Server, header, reader)
 		if err != nil {
 			slog.Error("handle meta data failed: %v", err)
 		}
 	case constant.ApiKeyCreateTopics:
-		err := api.HandleCreateTopics(c.conn, header, reader, c.server.topicStore)
+		err := api.HandleCreateTopics(c.NetConn, header, reader, c.Server.topicStore)
 		if err != nil {
 			slog.Error("handle create topics failed: %v", err)
 		}
-		//fmt.Print(c.server.topicStore)
+		//fmt.Print(c.Server.topicStore)
 	default:
 		slog.Error("api key not supported: %v", apiKey)
 	}

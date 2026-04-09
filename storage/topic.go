@@ -6,6 +6,7 @@ import (
 
 	"github.com/KhaiHust/kaf-go/common"
 	"github.com/KhaiHust/kaf-go/constant"
+	"github.com/KhaiHust/kaf-go/coordinator"
 	"github.com/KhaiHust/kaf-go/protocol/admin"
 	"github.com/KhaiHust/kaf-go/protocol/topic"
 	"github.com/KhaiHust/kaf-go/protocol/types"
@@ -77,7 +78,7 @@ func (t *TopicStore) GetTopicByName(topicName string) (*topic.CreateTopicRespons
 	return &topicData, nil
 }
 
-func (t *TopicStore) GetTopicMetadataByNames(topicNames []string) ([]admin.MetadataResponseTopic, error) {
+func (t *TopicStore) GetTopicMetadataByNames(topicNames []string, pss *coordinator.PartitionStateStore) ([]admin.MetadataResponseTopic, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	topicIds := make([]uuid.UUID, 0)
@@ -97,15 +98,22 @@ func (t *TopicStore) GetTopicMetadataByNames(topicNames []string) ([]admin.Metad
 
 		var metadataResponsePartitions []admin.MetadataResponsePartition
 		for idx := int32(0); idx < topicData.NumPartitions; idx++ {
+			ps, err := pss.GetPartitionState(string(topicData.Name), idx)
+			if err != nil || ps == nil {
+				metadataResponsePartitions = append(metadataResponsePartitions, admin.MetadataResponsePartition{
+					ErrorCode: constant.ErrLeaderNotAvailable,
+				})
+				continue
+			}
 			metadataResponsePartitions = append(metadataResponsePartitions, admin.MetadataResponsePartition{
 
 				ErrorCode:       0,
 				PartitionIndex:  idx,
-				LeaderID:        1,
-				LeaderEpoch:     1,
-				ReplicaNodes:    []int32{1},
-				IsrNodes:        []int32{1},
-				OfflineReplicas: []int32{1},
+				LeaderID:        ps.LeaderBrokerID,
+				LeaderEpoch:     ps.LeaderEpoch,
+				ReplicaNodes:    ps.Replicas,
+				IsrNodes:        ps.ISR,
+				OfflineReplicas: []int32{0},
 			},
 			)
 		}

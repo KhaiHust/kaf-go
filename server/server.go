@@ -20,25 +20,27 @@ import (
 )
 
 type Server struct {
-	addr       string
-	logDir     string
-	brokerID   int32
-	topicStore *storage.TopicStore
-	groupStore *coordinator.GroupStore
-	listener   net.Listener
-	wg         *sync.WaitGroup
-	quit       chan struct{}
+	addr                string
+	logDir              string
+	brokerID            int32
+	topicStore          *storage.TopicStore
+	groupStore          *coordinator.GroupStore
+	partitionStateStore *coordinator.PartitionStateStore
+	listener            net.Listener
+	wg                  *sync.WaitGroup
+	quit                chan struct{}
 }
 
 func NewServer(addr, logDir string, brokerID int32) *Server {
 	return &Server{
-		addr:       addr,
-		logDir:     logDir,
-		brokerID:   brokerID,
-		topicStore: storage.NewTopicStore(),
-		groupStore: coordinator.NewGroupStore(),
-		quit:       make(chan struct{}),
-		wg:         new(sync.WaitGroup),
+		addr:                addr,
+		logDir:              logDir,
+		brokerID:            brokerID,
+		topicStore:          storage.NewTopicStore(),
+		groupStore:          coordinator.NewGroupStore(),
+		partitionStateStore: coordinator.NewPartitionStateStore(),
+		quit:                make(chan struct{}),
+		wg:                  new(sync.WaitGroup),
 	}
 }
 
@@ -138,6 +140,10 @@ func (s *Server) recoverTopic() error {
 			}
 			s.topicStore.AddCommitLog(topicId, partitionIndex, commitLog)
 
+			if err = s.partitionStateStore.SetLeader(meta.Name, partitionIndex, s.brokerID); err != nil {
+				return err
+			}
+
 			slog.Info("recovered partition",
 				"topic", meta.Name,
 				"partition", partitionIndex,
@@ -172,4 +178,14 @@ func defaultCommitLogConfig() *config.CommitLogConfig {
 		RetentionTime:   7 * 24 * time.Hour,
 	}
 
+}
+
+func (s *Server) GetTopicStore() *storage.TopicStore {
+	return s.topicStore
+}
+func (s *Server) GetGroupStore() *coordinator.GroupStore {
+	return s.groupStore
+}
+func (s *Server) GetPartitionStateStore() *coordinator.PartitionStateStore {
+	return s.partitionStateStore
 }

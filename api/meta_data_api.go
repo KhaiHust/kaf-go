@@ -8,10 +8,9 @@ import (
 	"github.com/KhaiHust/kaf-go/common"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/admin"
-	"github.com/KhaiHust/kaf-go/storage"
 )
 
-func HandleMetaData(conn net.Conn, header *protocol.RequestHeader, r *protocol.Reader, store *storage.TopicStore) error {
+func HandleMetaData(conn net.Conn, brokerContext IBrokerContext, header *protocol.RequestHeader, r *protocol.Reader) error {
 	responseHeader := &protocol.ResponseHeader{
 		CorrelationId: header.CorrelationId,
 		ApiVersion:    header.ApiVersion,
@@ -35,7 +34,7 @@ func HandleMetaData(conn net.Conn, header *protocol.RequestHeader, r *protocol.R
 	for i, t := range requestBody.Topics {
 		topicNames[i] = *t.Name
 	}
-	topicsMetaData, _ := store.GetTopicMetadataByNames(topicNames)
+	topicsMetaData, _ := brokerContext.GetTopicStore().GetTopicMetadataByNames(topicNames)
 
 	responseBody := &admin.MetadataResponse{
 		ThrottleTimeMs: 0,

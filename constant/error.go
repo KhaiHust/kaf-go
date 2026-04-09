@@ -10,6 +10,7 @@ const ErrorFormat = "KAF_GO_ERR_%d"
 const (
 	ErrCorruptMessage          = 2
 	ErrUnknownTopicOrPartition = 3
+	ErrLeaderNotAvailable      = 5
 	ErrInvalidTopicException   = 17
 	ErrIllegalGeneration       = 22
 	ErrUnknowMemberId          = 25
