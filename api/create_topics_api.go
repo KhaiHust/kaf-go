@@ -21,24 +21,11 @@ var (
 	LogStorageDataFolder = "./var/log/"
 )
 
-func HandleCreateTopics(conn net.Conn, header *protocol.RequestHeader, reader *protocol.Reader, topicStore *storage.TopicStore) error {
+func HandleCreateTopics(conn net.Conn, brokerContext IBrokerContext, header *protocol.RequestHeader, reader *protocol.Reader) error {
 
 	createTopicRequest := new(topic.CreateTopicsRequest)
 	if err := createTopicRequest.Decode(reader); err != nil {
 		return err
-	}
-
-	slog.Info("Decoded CreateTopicsRequest",
-		"numTopics", len(createTopicRequest.Topics),
-		"timeoutMs", createTopicRequest.TimeoutMs,
-		"validateOnly", createTopicRequest.ValidateOnly)
-
-	for i, t := range createTopicRequest.Topics {
-		slog.Info(fmt.Sprintf("Topic[%d]", i),
-			"name", t.Name,
-			"numPartitions", t.NumPartitions,
-			"replicationFactor", t.ReplicationFactor,
-			"numConfigs", len(t.Configs))
 	}
 
 	responseHeader := &protocol.ResponseHeader{
@@ -51,7 +38,24 @@ func HandleCreateTopics(conn net.Conn, header *protocol.RequestHeader, reader *p
 	response.Topics = validateTopics(createTopicRequest.Topics)
 	response.ThrottleTimeMs = 0
 
+	topicStore := brokerContext.GetTopicStore()
+	pss := brokerContext.GetPartitionStateStore()
+	knownBrokers := []int32{brokerContext.GetBrokerID()}
+
 	for _, topicData := range response.Topics {
+		if topicData.ErrorCode != 0 {
+			continue
+		}
+
+		pss.AssignReplicas(topicData.Name.String(), topicData.NumPartitions, int32(topicData.ReplicationFactor), knownBrokers)
+
+		for partition := int32(0); partition < topicData.NumPartitions; partition++ {
+			ps := pss.GetPartitionState(topicData.Name.String(), partition)
+			if ps != nil && ps.LeaderBrokerID != brokerContext.GetBrokerID() {
+				brokerContext.StartFollowerFetch(topicData.Name.String(), partition, ps.LeaderBrokerID)
+			}
+		}
+
 		_ = topicStore.AddTopic(topicData)
 		_ = createTopicStorage(topicStore, topicData)
 	}

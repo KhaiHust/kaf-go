@@ -52,6 +52,65 @@ type ReplicaState struct {
 	ReplicaEpoch int64
 }
 
+func (f *FetchRequest) Encode(w *protocol.Writer) error {
+	w.WriteInt32(f.MaxWaitMs)
+	w.WriteInt32(f.MinBytes)
+	w.WriteInt32(f.MaxBytes)
+	w.WriteInt8(f.IsolationLevel)
+	w.WriteInt32(f.SessionId)
+	w.WriteInt32(f.SessionEpoch)
+
+	// topics
+	w.WriteCompactArrayLen(len(f.Topics))
+	for i := range f.Topics {
+		if err := f.Topics[i].encode(w); err != nil {
+			return fmt.Errorf("topic[%d]: %w", i, err)
+		}
+	}
+
+	// forgotten_topics_data
+	w.WriteCompactArrayLen(len(f.ForgottenTopics))
+	for i := range f.ForgottenTopics {
+		if err := f.ForgottenTopics[i].encode(w); err != nil {
+			return fmt.Errorf("forgotten_topic[%d]: %w", i, err)
+		}
+	}
+
+	// rack_id — regular COMPACT_STRING (not tagged)
+	w.WriteCompactString(f.RackId)
+
+	// request-level tagged fields
+	f.encodeTaggedFields(w)
+
+	return nil
+}
+
+func (f *FetchRequest) encodeTaggedFields(w *protocol.Writer) {
+	var count int
+	if f.ClusterId != nil {
+		count++
+	}
+	if f.ReplicaState != nil {
+		count++
+	}
+	w.WriteUVarInt(uint64(count))
+
+	if f.ClusterId != nil {
+		s := *f.ClusterId
+		size := protocol.UVarIntSize(uint64(len(s)+1)) + len(s)
+		w.WriteUVarInt(0) // tag 0: cluster_id
+		w.WriteUVarInt(uint64(size))
+		w.WriteCompactNullableString(f.ClusterId)
+	}
+
+	if f.ReplicaState != nil {
+		w.WriteUVarInt(1)  // tag 1: replica_state
+		w.WriteUVarInt(12) // INT32 + INT64 = 4 + 8 bytes
+		w.WriteInt32(f.ReplicaState.ReplicaId)
+		w.WriteInt64(f.ReplicaState.ReplicaEpoch)
+	}
+}
+
 func (f *FetchRequest) Decode(r *protocol.Reader) error {
 	var err error
 
@@ -172,6 +231,19 @@ func (t *FetchTopic) decode(r *protocol.Reader) error {
 	return r.ReadTaggedFields() // topic-level tagged fields (empty in v18)
 }
 
+func (t *FetchTopic) encode(w *protocol.Writer) error {
+	w.WriteUUID(t.TopicId)
+
+	w.WriteCompactArrayLen(len(t.Partitions))
+	for i := range t.Partitions {
+		if err := t.Partitions[i].encode(w); err != nil {
+			return fmt.Errorf("partition[%d]: %w", i, err)
+		}
+	}
+	w.WriteEmptyTaggedFields() // empty in v18
+	return nil
+}
+
 // --- FetchPartition ---
 
 func (p *FetchPartition) decode(r *protocol.Reader) error {
@@ -197,6 +269,40 @@ func (p *FetchPartition) decode(r *protocol.Reader) error {
 
 	// partition-level tagged fields
 	return p.decodeTaggedFields(r)
+}
+
+func (p *FetchPartition) encode(w *protocol.Writer) error {
+	w.WriteInt32(p.Partition)
+	w.WriteInt32(p.CurrentLeaderEpoch)
+	w.WriteInt64(p.FetchOffset)
+	w.WriteInt32(p.LastFetchedEpoch)
+	w.WriteInt64(p.LogStartOffset)
+	w.WriteInt32(p.PartitionMaxBytes)
+	p.encodeTaggedFields(w)
+	return nil
+}
+
+func (p *FetchPartition) encodeTaggedFields(w *protocol.Writer) {
+	var count int
+	if p.ReplicaDirectoryId != nil {
+		count++
+	}
+	if p.HighWatermark != nil {
+		count++
+	}
+	w.WriteUVarInt(uint64(count))
+
+	if p.ReplicaDirectoryId != nil {
+		w.WriteUVarInt(0)  // tag 0: replica_directory_id
+		w.WriteUVarInt(16) // UUID = 16 bytes
+		w.WriteUUID(*p.ReplicaDirectoryId)
+	}
+
+	if p.HighWatermark != nil {
+		w.WriteUVarInt(1) // tag 1: high_watermark
+		w.WriteUVarInt(8) // INT64 = 8 bytes
+		w.WriteInt64(*p.HighWatermark)
+	}
 }
 
 func (p *FetchPartition) decodeTaggedFields(r *protocol.Reader) error {
@@ -259,4 +365,15 @@ func (f *ForgottenTopic) decode(r *protocol.Reader) error {
 		}
 	}
 	return r.ReadTaggedFields()
+}
+
+func (f *ForgottenTopic) encode(w *protocol.Writer) error {
+	w.WriteUUID(f.TopicId)
+
+	w.WriteCompactArrayLen(len(f.Partitions))
+	for i := range f.Partitions {
+		w.WriteInt32(f.Partitions[i])
+	}
+	w.WriteEmptyTaggedFields() // empty in v18
+	return nil
 }

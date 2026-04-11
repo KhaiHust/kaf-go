@@ -8,7 +8,6 @@ import (
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/producer"
-	"github.com/KhaiHust/kaf-go/storage"
 	"github.com/gofrs/uuid/v5"
 )
 
@@ -23,7 +22,7 @@ type topicResult struct {
 	partitions []partitionResult
 }
 
-func HandleProduceApiKeys(conn net.Conn, header *protocol.RequestHeader, r *protocol.Reader, topicStore *storage.TopicStore) error {
+func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *protocol.RequestHeader, r *protocol.Reader) error {
 	produceRequest := &producer.ProduceRequest{}
 	if err := produceRequest.Decode(r); err != nil {
 		slog.Error("HandleProduceApiKeys: Decode produceRequest error:", "error", err)
@@ -31,7 +30,12 @@ func HandleProduceApiKeys(conn net.Conn, header *protocol.RequestHeader, r *prot
 	}
 
 	var topicResults []topicResult
+	pss := brokerContext.GetPartitionStateStore()
 	for _, topic := range produceRequest.TopicData {
+		topicMeta, err := brokerContext.GetTopicStore().GetTopic(topic.TopicId)
+		if err != nil {
+			continue
+		}
 		toResult := &topicResult{
 			name:    topic.Name.String(),
 			topicId: topic.TopicId,
@@ -41,6 +45,14 @@ func HandleProduceApiKeys(conn net.Conn, header *protocol.RequestHeader, r *prot
 			pr := &partitionResult{
 				index: partition.Index,
 			}
+
+			ps := pss.GetPartitionState(topicMeta.Name.String(), partition.Index)
+			if ps == nil || ps.LeaderBrokerID != brokerContext.GetBrokerID() {
+				pr.errorCode = constant.ErrErrNotLeaderForPartition
+				toResult.partitions = append(toResult.partitions, *pr)
+				continue
+			}
+
 			if partition.Records == nil {
 				toResult.partitions = append(toResult.partitions, *pr)
 				continue
@@ -54,7 +66,7 @@ func HandleProduceApiKeys(conn net.Conn, header *protocol.RequestHeader, r *prot
 			}
 
 			//write to commit log
-			partitionCommitLog := topicStore.GetCommitLog(topic.TopicId, partition.Index)
+			partitionCommitLog := brokerContext.GetTopicStore().GetCommitLog(topic.TopicId, partition.Index)
 			if partitionCommitLog == nil {
 				pr.errorCode = constant.ErrUnknownTopicOrPartition
 				toResult.partitions = append(toResult.partitions, *pr)

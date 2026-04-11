@@ -98,15 +98,14 @@ func (t *TopicStore) GetTopicMetadataByNames(topicNames []string, pss *coordinat
 
 		var metadataResponsePartitions []admin.MetadataResponsePartition
 		for idx := int32(0); idx < topicData.NumPartitions; idx++ {
-			ps, err := pss.GetPartitionState(string(topicData.Name), idx)
-			if err != nil || ps == nil {
+			ps := pss.GetPartitionState(string(topicData.Name), idx)
+			if ps == nil {
 				metadataResponsePartitions = append(metadataResponsePartitions, admin.MetadataResponsePartition{
 					ErrorCode: constant.ErrLeaderNotAvailable,
 				})
 				continue
 			}
 			metadataResponsePartitions = append(metadataResponsePartitions, admin.MetadataResponsePartition{
-
 				ErrorCode:       0,
 				PartitionIndex:  idx,
 				LeaderID:        ps.LeaderBrokerID,

@@ -8,17 +8,18 @@ import (
 const ErrorFormat = "KAF_GO_ERR_%d"
 
 const (
-	ErrCorruptMessage          = 2
-	ErrUnknownTopicOrPartition = 3
-	ErrLeaderNotAvailable      = 5
-	ErrInvalidTopicException   = 17
-	ErrIllegalGeneration       = 22
-	ErrUnknowMemberId          = 25
-	ErrRebalanceInProgress     = 27
-	ErrTopicAlreadyExists      = 36
-	ErrKafkaStorageError       = 56
-	ErrGroupIdNotFound         = 69
-	ErrMemberIdRequired        = 79
+	ErrCorruptMessage           = 2
+	ErrUnknownTopicOrPartition  = 3
+	ErrLeaderNotAvailable       = 5
+	ErrErrNotLeaderForPartition = 6
+	ErrInvalidTopicException    = 17
+	ErrIllegalGeneration        = 22
+	ErrUnknowMemberId           = 25
+	ErrRebalanceInProgress      = 27
+	ErrTopicAlreadyExists       = 36
+	ErrKafkaStorageError        = 56
+	ErrGroupIdNotFound          = 69
+	ErrMemberIdRequired         = 79
 )
 
 func IsError(err error) bool {

@@ -34,7 +34,8 @@ func HandleMetaData(conn net.Conn, brokerContext IBrokerContext, header *protoco
 	for i, t := range requestBody.Topics {
 		topicNames[i] = *t.Name
 	}
-	topicsMetaData, _ := brokerContext.GetTopicStore().GetTopicMetadataByNames(topicNames)
+	pss := brokerContext.GetPartitionStateStore()
+	topicsMetaData, _ := brokerContext.GetTopicStore().GetTopicMetadataByNames(topicNames, pss)
 
 	responseBody := &admin.MetadataResponse{
 		ThrottleTimeMs: 0,

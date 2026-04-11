@@ -55,12 +55,12 @@ func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reade
 	//var resp []byte
 	switch apiKey {
 	case constant.ApiKeyProduce:
-		err := api.HandleProduceApiKeys(c.NetConn, header, reader, c.Server.topicStore)
+		err := api.HandleProduceApiKeys(c.NetConn, c.Server, header, reader)
 		if err != nil {
 			slog.Error("handle produce failed: %v", err)
 		}
 	case constant.ApiKeyFetch:
-		err := api.HandleFetchApiKeys(c.NetConn, header, reader, c.Server.topicStore)
+		err := api.HandleFetchApiKeys(c.NetConn, c.Server, header, reader)
 		if err != nil {
 			slog.Error("handle fetch failed: %v", err)
 		}
@@ -122,11 +122,10 @@ func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reade
 			slog.Error("handle meta data failed: %v", err)
 		}
 	case constant.ApiKeyCreateTopics:
-		err := api.HandleCreateTopics(c.NetConn, header, reader, c.Server.topicStore)
+		err := api.HandleCreateTopics(c.NetConn, c.Server, header, reader)
 		if err != nil {
 			slog.Error("handle create topics failed: %v", err)
 		}
-		//fmt.Print(c.Server.topicStore)
 	default:
 		slog.Error("api key not supported: %v", apiKey)
 	}

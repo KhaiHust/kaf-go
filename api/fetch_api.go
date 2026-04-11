@@ -9,7 +9,6 @@ import (
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/fetch"
-	"github.com/KhaiHust/kaf-go/storage"
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
 )
 
@@ -28,7 +27,7 @@ func (s *ioSegment) size() int64 {
 	return int64(len(s.data))
 }
 
-func HandleFetchApiKeys(conn net.Conn, header *protocol.RequestHeader, r *protocol.Reader, topicStore *storage.TopicStore) error {
+func HandleFetchApiKeys(conn net.Conn, brokerContext IBrokerContext, header *protocol.RequestHeader, r *protocol.Reader) error {
 	fetchRequest := fetch.FetchRequest{}
 	if err := fetchRequest.Decode(r); err != nil {
 		return err
@@ -44,6 +43,8 @@ func HandleFetchApiKeys(conn net.Conn, header *protocol.RequestHeader, r *protoc
 	}
 
 	var topicResults []topicResult
+	//pss := brokerContext.GetPartitionStateStore()
+
 	for _, t := range fetchRequest.Topics {
 		tr := topicResult{topicId: t.TopicId}
 		for _, part := range t.Partitions {
@@ -51,8 +52,10 @@ func HandleFetchApiKeys(conn net.Conn, header *protocol.RequestHeader, r *protoc
 				PartitionIndex:       part.Partition,
 				PreferredReadReplica: -1,
 			}
+			//ps := pss.GetPartitionState(t.TopicId, part.Partition)
+			//todo: check leader before fetch
 			var region *commitlog.RecordsRegion
-			cl := topicStore.GetCommitLog(t.TopicId, part.Partition)
+			cl := brokerContext.GetTopicStore().GetCommitLog(t.TopicId, part.Partition)
 			if cl == nil {
 				pr.ErrorCode = constant.ErrUnknownTopicOrPartition
 			} else {

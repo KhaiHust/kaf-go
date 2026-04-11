@@ -20,19 +20,20 @@ import (
 )
 
 type Server struct {
-	addr                string
-	logDir              string
-	brokerID            int32
-	topicStore          *storage.TopicStore
-	groupStore          *coordinator.GroupStore
-	partitionStateStore *coordinator.PartitionStateStore
-	listener            net.Listener
-	wg                  *sync.WaitGroup
-	quit                chan struct{}
+	addr                  string
+	logDir                string
+	brokerID              int32
+	topicStore            *storage.TopicStore
+	groupStore            *coordinator.GroupStore
+	partitionStateStore   *coordinator.PartitionStateStore
+	replicaFetcherManager *ReplicaFetcherManager
+	listener              net.Listener
+	wg                    *sync.WaitGroup
+	quit                  chan struct{}
 }
 
 func NewServer(addr, logDir string, brokerID int32) *Server {
-	return &Server{
+	s := &Server{
 		addr:                addr,
 		logDir:              logDir,
 		brokerID:            brokerID,
@@ -42,6 +43,8 @@ func NewServer(addr, logDir string, brokerID int32) *Server {
 		quit:                make(chan struct{}),
 		wg:                  new(sync.WaitGroup),
 	}
+	s.replicaFetcherManager = NewReplicaFetcherManager(s)
+	return s
 }
 
 func (s *Server) Start() error {
@@ -188,4 +191,12 @@ func (s *Server) GetGroupStore() *coordinator.GroupStore {
 }
 func (s *Server) GetPartitionStateStore() *coordinator.PartitionStateStore {
 	return s.partitionStateStore
+}
+
+func (s *Server) GetBrokerID() int32 {
+	return s.brokerID
+}
+
+func (s *Server) StartFollowerFetch(topicName string, partition, leaderID int32) {
+	s.replicaFetcherManager.AddFetcher(topicName, partition, leaderID)
 }

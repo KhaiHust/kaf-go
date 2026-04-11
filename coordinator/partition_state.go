@@ -25,16 +25,16 @@ func NewPartitionStateStore() *PartitionStateStore {
 		partitions: make(map[string]*PartitionState),
 	}
 }
-func (p *PartitionStateStore) GetPartitionState(topicName string, partition int32) (*PartitionState, error) {
+func (p *PartitionStateStore) GetPartitionState(topicName string, partition int32) *PartitionState {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
 	key := fmt.Sprintf("%s-%d", topicName, partition)
 	if ps, ok := p.partitions[key]; ok {
-		return ps, nil
+		return ps
 	}
 
-	return nil, nil
+	return nil
 }
 
 func (p *PartitionStateStore) SetLeader(topicName string, partition int32, brokerID int32) error {
@@ -70,4 +70,29 @@ func (p *PartitionStateStore) UpdateISR(topicName string, partition int32, newIS
 		}
 		ps.ISR = append(ps.ISR, newISR)
 	}
+}
+
+func (p *PartitionStateStore) AssignReplicas(topicName string, numPartitions int32, replicationFactor int32, brokerIDs []int32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	//partition index => list of brokerIds
+	// round-robin with shift:
+	for partition := int32(0); partition < numPartitions; partition++ {
+		replicas := make([]int32, 0, replicationFactor)
+		for i := int32(0); i < replicationFactor; i++ {
+			brokerID := brokerIDs[(int(partition)+int(i))%len(brokerIDs)]
+			replicas = append(replicas, brokerID)
+		}
+
+		key := fmt.Sprintf("%s-%d", topicName, partition)
+		p.partitions[key] = &PartitionState{
+			TopicName:      topicName,
+			PartitionIndex: partition,
+			LeaderBrokerID: replicas[0],
+			Replicas:       replicas,
+			ISR:            []int32{replicas[0]},
+		}
+	}
+
 }
