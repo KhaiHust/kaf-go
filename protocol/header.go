@@ -17,6 +17,9 @@ func (h *RequestHeader) Encode(w *Writer) error {
 	w.WriteInt16(h.ApiVersion)
 	w.WriteInt32(h.CorrelationId)
 	w.WriteNullableString(h.ClientId)
+	if common.IsFlexible(h.ApiKey, h.ApiVersion) {
+		w.WriteEmptyTaggedFields()
+	}
 	return nil
 }
 
@@ -59,6 +62,9 @@ func (h *ResponseHeader) Decode(r *Reader) error {
 	var err error
 	if h.CorrelationId, err = r.ReadInt32(); err != nil {
 		return err
+	}
+	if common.IsFlexible(h.ApiKey, h.ApiVersion) {
+		return r.ReadTaggedFields()
 	}
 	return nil
 }

@@ -18,6 +18,7 @@ type TopicStore struct {
 	topics     map[uuid.UUID]topic.CreateTopicResponseData
 	topicNames map[string]uuid.UUID
 	commitLogs map[string]commitlog.ICommitLog
+	metas      map[uuid.UUID]*TopicMeta // sidecar for fields not in CreateTopicResponseData (min.insync.replicas, etc)
 	mu         sync.RWMutex
 }
 
@@ -26,8 +27,29 @@ func NewTopicStore() *TopicStore {
 		topics:     make(map[uuid.UUID]topic.CreateTopicResponseData),
 		topicNames: make(map[string]uuid.UUID),
 		commitLogs: make(map[string]commitlog.ICommitLog),
+		metas:      make(map[uuid.UUID]*TopicMeta),
 		mu:         sync.RWMutex{},
 	}
+}
+
+// GetMinInsyncReplicas returns the configured min.insync.replicas for topicId,
+// defaulting to 1 (Kafka default) when no meta has been registered yet.
+func (t *TopicStore) GetMinInsyncReplicas(topicId uuid.UUID) int16 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if m, ok := t.metas[topicId]; ok && m.MinInsyncReplicas > 0 {
+		return m.MinInsyncReplicas
+	}
+	return 1
+}
+
+// SetTopicMeta upserts the in-memory TopicMeta sidecar. Called from CreateTopics
+// on the controller and from ApplyMetadataRecord on followers, so both ends of
+// the cluster honor min.insync.replicas without re-reading meta.json.
+func (t *TopicStore) SetTopicMeta(topicId uuid.UUID, meta *TopicMeta) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.metas[topicId] = meta
 }
 
 func (t *TopicStore) AddCommitLog(topicId uuid.UUID, partition int32, log commitlog.ICommitLog) {
@@ -42,6 +64,26 @@ func (t *TopicStore) GetCommitLog(topicId uuid.UUID, partition int32) commitlog.
 	defer t.mu.RUnlock()
 	return t.commitLogs[fmt.Sprintf("%s-%d", topicId.String(), partition)]
 }
+
+// RegisterTopic registers a topic by ID and name (used when applying metadata records).
+// Skips silently if the topic is already registered.
+func (t *TopicStore) RegisterTopic(topicId uuid.UUID, name string, numPartitions int32) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.topics[topicId]; ok {
+		return nil
+	}
+	t.topics[topicId] = topic.CreateTopicResponseData{
+		Name:              types.CompactString(name),
+		TopicId:           topicId,
+		NumPartitions:     numPartitions,
+		ReplicationFactor: 1,
+		ErrorCode:         0,
+	}
+	t.topicNames[name] = topicId
+	return nil
+}
+
 func (t *TopicStore) AddTopic(topicData topic.CreateTopicResponseData) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -101,7 +143,8 @@ func (t *TopicStore) GetTopicMetadataByNames(topicNames []string, pss *coordinat
 			ps := pss.GetPartitionState(string(topicData.Name), idx)
 			if ps == nil {
 				metadataResponsePartitions = append(metadataResponsePartitions, admin.MetadataResponsePartition{
-					ErrorCode: constant.ErrLeaderNotAvailable,
+					ErrorCode:      constant.ErrLeaderNotAvailable,
+					PartitionIndex: idx,
 				})
 				continue
 			}
@@ -187,5 +230,6 @@ func (t *TopicStore) AddTopicMetadata(metaData *TopicMeta) error {
 		ErrorCode:         0,
 	}
 	t.topicNames[metaData.Name] = topicId
+	t.metas[topicId] = metaData
 	return nil
 }

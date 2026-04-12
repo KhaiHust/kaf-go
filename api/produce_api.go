@@ -3,9 +3,11 @@ package api
 import (
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/KhaiHust/kaf-go/common"
 	"github.com/KhaiHust/kaf-go/constant"
+	"github.com/KhaiHust/kaf-go/coordinator"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/producer"
 	"github.com/gofrs/uuid/v5"
@@ -15,6 +17,7 @@ type partitionResult struct {
 	index      int32
 	baseOffset int64
 	errorCode  int16
+	suppressed bool
 }
 type topicResult struct {
 	name       string
@@ -28,6 +31,8 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 		slog.Error("HandleProduceApiKeys: Decode produceRequest error:", "error", err)
 		return err
 	}
+
+	validAck := validateValidAcks(produceRequest.Acks)
 
 	var topicResults []topicResult
 	pss := brokerContext.GetPartitionStateStore()
@@ -45,12 +50,26 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 			pr := &partitionResult{
 				index: partition.Index,
 			}
+			if !validAck {
+				pr.errorCode = constant.ErrInvalidRequiredAcks
+				toResult.partitions = append(toResult.partitions, *pr)
+				continue
+			}
 
 			ps := pss.GetPartitionState(topicMeta.Name.String(), partition.Index)
 			if ps == nil || ps.LeaderBrokerID != brokerContext.GetBrokerID() {
 				pr.errorCode = constant.ErrErrNotLeaderForPartition
 				toResult.partitions = append(toResult.partitions, *pr)
 				continue
+			}
+
+			if produceRequest.Acks == constant.AckExactlyOnce {
+				minISR := brokerContext.GetTopicStore().GetMinInsyncReplicas(topic.TopicId)
+				if int16(len(ps.ISR)) < minISR {
+					pr.errorCode = constant.ErrNotEnoughReplicas
+					toResult.partitions = append(toResult.partitions, *pr)
+					continue
+				}
 			}
 
 			if partition.Records == nil {
@@ -65,6 +84,25 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 				continue
 			}
 
+			// Idempotence dedup gate. PID < 0 means non-idempotent producer; skip the path.
+			pid := batch.ProducerId
+			epoch := batch.ProducerEpoch
+			firstSeq := batch.BaseSequence
+			lastSeq := firstSeq + int32(len(batch.Records)) - 1
+			if pid >= 0 && ps.Idempotence != nil {
+				cachedBase, dup, vErr := ps.Idempotence.Validate(pid, epoch, firstSeq, lastSeq)
+				if vErr != nil {
+					pr.errorCode = constant.GetErrorId(vErr)
+					toResult.partitions = append(toResult.partitions, *pr)
+					continue
+				}
+				if dup {
+					pr.baseOffset = cachedBase
+					toResult.partitions = append(toResult.partitions, *pr)
+					continue
+				}
+			}
+
 			//write to commit log
 			partitionCommitLog := brokerContext.GetTopicStore().GetCommitLog(topic.TopicId, partition.Index)
 			if partitionCommitLog == nil {
@@ -72,9 +110,48 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 				toResult.partitions = append(toResult.partitions, *pr)
 				continue
 			}
-			pr.baseOffset, err = partitionCommitLog.AppendRaw(partition.Records, int32(len(batch.Records)))
+			baseOffset, err := partitionCommitLog.AppendRaw(partition.Records, int32(len(batch.Records)))
 			if err != nil {
 				pr.errorCode = constant.ErrKafkaStorageError
+				toResult.partitions = append(toResult.partitions, *pr)
+				continue
+			}
+
+			if pid >= 0 && ps.Idempotence != nil {
+				ps.Idempotence.Record(pid, epoch, firstSeq, lastSeq, baseOffset)
+				if err := coordinator.SaveProducerStateSnapshot(partitionCommitLog.Dir(), ps.Idempotence.Snapshot()); err != nil {
+					slog.Warn("snapshot save failed", "topic", topicMeta.Name, "partition", partition.Index, "err", err)
+				}
+			}
+
+			lastOffset := baseOffset + int64(len(batch.Records)) - 1
+			ps.OnLeaderAppend(lastOffset)
+
+			switch produceRequest.Acks {
+			case constant.AckAtMostOnce:
+				pr.suppressed = true
+			case constant.AckAtLeastOnce:
+				pr.baseOffset = baseOffset
+			case constant.AckExactlyOnce:
+				w := &coordinator.PartitionAppendWaiter{
+					RequiredOffset: lastOffset,
+					ISRSnapshot:    append([]int32(nil), ps.ISR...),
+					Deadline:       time.Now().Add(time.Duration(produceRequest.TimeoutMs) * time.Millisecond),
+					Done:           make(chan error, 1),
+				}
+				ps.Purgatory.Add(w)
+				ps.Purgatory.CompleteUpTo(ps.GetHWM())
+				select {
+				case err := <-w.Done:
+					if err != nil {
+						pr.errorCode = constant.GetErrorId(err)
+					}
+					pr.baseOffset = baseOffset
+				case <-time.After(time.Until(w.Deadline)):
+					pr.errorCode = constant.ErrRequestTimedOut
+					pr.baseOffset = baseOffset
+				}
+
 			}
 			toResult.partitions = append(toResult.partitions, *pr)
 		}
@@ -125,4 +202,8 @@ func writeProduceApiResponse(conn net.Conn, header *protocol.RequestHeader, resu
 	}
 
 	return protocol.WriteFraming(conn, responseHeader, resp)
+}
+
+func validateValidAcks(ack int16) bool {
+	return ack == constant.AckAtMostOnce || ack == constant.AckAtLeastOnce || ack == constant.AckExactlyOnce
 }

@@ -79,6 +79,21 @@ func HandleApiVersionApi(header *protocol.RequestHeader, reader *protocol.Reader
 				MinVersion: 0,
 				MaxVersion: 7,
 			},
+			{
+				ApiKey:     constant.ApiKeyInitProducerId,
+				MinVersion: 0,
+				MaxVersion: 5,
+			},
+			{
+				ApiKey:     constant.ApiKeyBrokerRegistration,
+				MinVersion: 0,
+				MaxVersion: 0,
+			},
+			{
+				ApiKey:     constant.ApiKeyBrokerHeartbeat,
+				MinVersion: 0,
+				MaxVersion: 0,
+			},
 		},
 		ThrottleTimeMs: 0,
 	}

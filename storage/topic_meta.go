@@ -14,6 +14,7 @@ type TopicMeta struct {
 	TopicId           string `json:"topicId"`
 	NumPartitions     int32  `json:"numPartitions"`
 	ReplicationFactor int16  `json:"replicationFactor"`
+	MinInsyncReplicas int16  `json:"minInsyncReplicas" default:"1"`
 }
 
 func SaveTopicMeta(topicDir string, meta TopicMeta) error {

@@ -126,6 +126,21 @@ func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reade
 		if err != nil {
 			slog.Error("handle create topics failed: %v", err)
 		}
+	case constant.ApiKeyInitProducerId:
+		err := api.HandleInitProducerIdApi(c.NetConn, c.Server, header, reader)
+		if err != nil {
+			slog.Error("handle init producer id failed: %v", err)
+		}
+	case constant.ApiKeyBrokerRegistration:
+		err := api.HandleBrokerRegistrationApi(c.NetConn, c.Server, header, reader)
+		if err != nil {
+			slog.Error("handle broker registration failed", "err", err)
+		}
+	case constant.ApiKeyBrokerHeartbeat:
+		err := api.HandleBrokerHeartbeatApi(c.NetConn, c.Server, header, reader)
+		if err != nil {
+			slog.Error("handle broker heartbeat failed", "err", err)
+		}
 	default:
 		slog.Error("api key not supported: %v", apiKey)
 	}

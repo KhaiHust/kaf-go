@@ -16,17 +16,19 @@ type ReplicaFetcher struct {
 	topicName     string
 	partition     int32
 	fetchOffset   int64 // start from local LEO
+	brokerId      int32
 	commitLog     commitlog.ICommitLog
 	highWatermark int64
 	stopCh        chan struct{}
 }
 
-func NewReplicaFetcher(client *BrokerClient, topicName string, topicId uuid.UUID, partition int32, commitLog commitlog.ICommitLog) *ReplicaFetcher {
+func NewReplicaFetcher(client *BrokerClient, topicName string, topicId uuid.UUID, partition int32, brokerID int32, commitLog commitlog.ICommitLog) *ReplicaFetcher {
 	return &ReplicaFetcher{
 		client:      client,
 		topicName:   topicName,
 		topicID:     topicId,
 		partition:   partition,
+		brokerId:    brokerID,
 		fetchOffset: 0,
 		commitLog:   commitLog,
 		stopCh:      make(chan struct{}),
@@ -74,7 +76,7 @@ func (rf *ReplicaFetcher) Run() {
 			ForgottenTopics: []fetch.ForgottenTopic{},
 			RackId:          "",
 			ClusterId:       nil,
-			ReplicaState:    nil,
+			ReplicaState:    &fetch.ReplicaState{ReplicaId: rf.brokerId, ReplicaEpoch: -1},
 		}
 
 		resp, err := rf.client.Fetch(req)
@@ -142,7 +144,7 @@ func countRecordsInRecordBatches(raw []byte) (int32, error) {
 			return 0, io.ErrUnexpectedEOF
 		}
 
-		recordCount := int32(raw[pos+recordCountOffset]) | int32(raw[pos+recordCountOffset+1])<<8 | int32(raw[pos+recordCountOffset+2])<<16 | int32(raw[pos+recordCountOffset+3])<<24
+		recordCount := int32(binary.BigEndian.Uint32(raw[pos+recordCountOffset : pos+recordCountEnd]))
 		total += recordCount
 
 		pos += logOverhead + batchLen

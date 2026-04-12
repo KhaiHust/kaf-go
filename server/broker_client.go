@@ -79,6 +79,8 @@ func (bc *BrokerClient) Fetch(req *fetch.FetchRequest) (*fetch.FetchResponse, er
 
 	r := protocol.NewReader(respFraming)
 	var responseHeader protocol.ResponseHeader
+	responseHeader.ApiKey = constant.ApiKeyFetch
+	responseHeader.ApiVersion = 18
 	if err = responseHeader.Decode(r); err != nil {
 		return nil, err
 	}

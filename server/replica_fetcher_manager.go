@@ -2,7 +2,9 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
+	"path/filepath"
 	"sync"
 
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
@@ -24,15 +26,6 @@ func NewReplicaFetcherManager(server *Server) *ReplicaFetcherManager {
 	}
 }
 
-//func (m *ReplicaFetcherManager) StartFetchers() {
-//	m.mu.RLock()
-//	defer m.mu.RUnlock()
-//
-//	for _, fetcher := range m.fetchers {
-//		go fetcher.Run()
-//	}
-//}
-
 func (m *ReplicaFetcherManager) AddFetcher(topicName string, partition, leaderBrokerId int32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -44,12 +37,20 @@ func (m *ReplicaFetcherManager) AddFetcher(topicName string, partition, leaderBr
 
 	brokerClient, ok := m.brokerClients[leaderBrokerId]
 	if !ok {
-		return
+		bc, err := m.dialBrokerClientLocked(leaderBrokerId)
+		if err != nil {
+			slog.Warn("ISR: cannot start replica fetcher, peer unreachable",
+				"topic", topicName, "partition", partition, "leader", leaderBrokerId, "err", err)
+			return
+		}
+		brokerClient = bc
 	}
 
 	commitLogConfig := defaultCommitLogConfig()
-	commitLog, err := commitlog.NewCommitLog(m.server.logDir, commitLogConfig)
+	dir := filepath.Join(m.server.logDir, topicName, fmt.Sprintf("%s-%d", topicName, partition))
+	commitLog, err := commitlog.NewCommitLog(dir, commitLogConfig)
 	if err != nil {
+		slog.Warn("ISR: open replica commitlog failed", "topic", topicName, "partition", partition, "err", err)
 		return
 	}
 
@@ -57,9 +58,24 @@ func (m *ReplicaFetcherManager) AddFetcher(topicName string, partition, leaderBr
 	if err != nil {
 		return
 	}
-	fetcher := NewReplicaFetcher(brokerClient, topicName, topicData.TopicId, partition, commitLog)
+	fetcher := NewReplicaFetcher(brokerClient, topicName, topicData.TopicId, partition, m.server.brokerID, commitLog)
 	m.fetchers[key] = fetcher
+	slog.Info("replica fetcher started", "topic", topicName, "partition", partition, "leader", leaderBrokerId)
 	go fetcher.Run()
+}
+
+func (m *ReplicaFetcherManager) dialBrokerClientLocked(brokerId int32) (*BrokerClient, error) {
+	addr := m.server.brokerRegistry.Addr(brokerId)
+	if addr == "" {
+		return nil, fmt.Errorf("broker %d not in registry", brokerId)
+	}
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial broker %d at %s: %w", brokerId, addr, err)
+	}
+	bc := NewBrokerClient(conn, brokerId, addr)
+	m.brokerClients[brokerId] = bc
+	return bc, nil
 }
 
 func (m *ReplicaFetcherManager) StopFetcher(topicName string, partition int32) {

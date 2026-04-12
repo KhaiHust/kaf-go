@@ -6,11 +6,13 @@ import (
 	"net"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/KhaiHust/kaf-go/config"
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/protocol"
+	metadatapkg "github.com/KhaiHust/kaf-go/protocol/metadata"
 	"github.com/KhaiHust/kaf-go/protocol/topic"
 	"github.com/KhaiHust/kaf-go/storage"
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
@@ -20,6 +22,10 @@ import (
 var (
 	LogStorageDataFolder = "./var/log/"
 )
+
+type TopicConfig struct {
+	MinInsyncReplicas int16
+}
 
 func HandleCreateTopics(conn net.Conn, brokerContext IBrokerContext, header *protocol.RequestHeader, reader *protocol.Reader) error {
 
@@ -40,7 +46,10 @@ func HandleCreateTopics(conn net.Conn, brokerContext IBrokerContext, header *pro
 
 	topicStore := brokerContext.GetTopicStore()
 	pss := brokerContext.GetPartitionStateStore()
-	knownBrokers := []int32{brokerContext.GetBrokerID()}
+	knownBrokers := brokerContext.GetAllBrokerIDs()
+	if len(knownBrokers) == 0 {
+		knownBrokers = []int32{brokerContext.GetBrokerID()}
+	}
 
 	for _, topicData := range response.Topics {
 		if topicData.ErrorCode != 0 {
@@ -49,6 +58,18 @@ func HandleCreateTopics(conn net.Conn, brokerContext IBrokerContext, header *pro
 
 		pss.AssignReplicas(topicData.Name.String(), topicData.NumPartitions, int32(topicData.ReplicationFactor), knownBrokers)
 
+		_ = topicStore.AddTopic(topicData)
+
+		topicConfig, cfgErr := parseTopicConfig(topicData.Configs)
+		if cfgErr != nil {
+			slog.Error("invalid topic config", "topic", topicData.Name, "err", cfgErr)
+			topicConfig = &TopicConfig{MinInsyncReplicas: 1}
+		}
+
+		_ = createTopicStorage(topicStore, topicData, topicConfig)
+
+		// StartFollowerFetch must run AFTER AddTopic + createTopicStorage so the
+		// fetcher can resolve the topicId and dial the leader's address.
 		for partition := int32(0); partition < topicData.NumPartitions; partition++ {
 			ps := pss.GetPartitionState(topicData.Name.String(), partition)
 			if ps != nil && ps.LeaderBrokerID != brokerContext.GetBrokerID() {
@@ -56,8 +77,30 @@ func HandleCreateTopics(conn net.Conn, brokerContext IBrokerContext, header *pro
 			}
 		}
 
-		_ = topicStore.AddTopic(topicData)
-		_ = createTopicStorage(topicStore, topicData)
+		// Append TopicRecord + PartitionRecords to metadata log so followers learn about this topic.
+		topicRec := &metadatapkg.TopicRecord{
+			TopicId:           topicData.TopicId,
+			Name:              topicData.Name.String(),
+			NumPartitions:     topicData.NumPartitions,
+			MinInsyncReplicas: topicConfig.MinInsyncReplicas,
+		}
+		_ = brokerContext.GetMetadataLog().Append(topicRec.Encode())
+
+		for partition := int32(0); partition < topicData.NumPartitions; partition++ {
+			ps := pss.GetPartitionState(topicData.Name.String(), partition)
+			if ps == nil {
+				continue
+			}
+			partRec := &metadatapkg.PartitionRecord{
+				TopicId:     topicData.TopicId,
+				PartitionId: partition,
+				Leader:      ps.LeaderBrokerID,
+				LeaderEpoch: 0,
+				Replicas:    ps.Replicas,
+				ISR:         ps.ISR,
+			}
+			_ = brokerContext.GetMetadataLog().Append(partRec.Encode())
+		}
 	}
 	return protocol.WriteFraming(conn, responseHeader, response)
 
@@ -109,7 +152,7 @@ func validateTopicData(topicData topic.CreateTopicData) int16 {
 	return 0
 }
 
-func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.CreateTopicResponseData) error {
+func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.CreateTopicResponseData, topicConfig *TopicConfig) error {
 	commitLogConfig := &config.CommitLogConfig{
 		SegmentMaxBytes: 1024 * 1024 * 100,
 		IndexInterval:   4 * 1024,
@@ -117,17 +160,24 @@ func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.
 		RetentionTime:   7 * 24 * time.Hour,
 	}
 
+	minISR := int16(1)
+	if topicConfig != nil && topicConfig.MinInsyncReplicas > 0 {
+		minISR = topicConfig.MinInsyncReplicas
+	}
+
 	topicName := topicResponseData.Name.String()
 	topicDir := LogStorageDataFolder + topicName
-	err := storage.SaveTopicMeta(topicDir, storage.TopicMeta{
+	meta := storage.TopicMeta{
 		Name:              topicName,
 		TopicId:           topicResponseData.TopicId.String(),
 		NumPartitions:     topicResponseData.NumPartitions,
 		ReplicationFactor: topicResponseData.ReplicationFactor,
-	})
-	if err != nil {
+		MinInsyncReplicas: minISR,
+	}
+	if err := storage.SaveTopicMeta(topicDir, meta); err != nil {
 		return fmt.Errorf("failed to save topic meta: %w", err)
 	}
+	topicStore.SetTopicMeta(topicResponseData.TopicId, &meta)
 
 	for numPar := int32(0); numPar < topicResponseData.NumPartitions; numPar++ {
 		dir := filepath.Join(topicDir, fmt.Sprintf("%s-%d", topicResponseData.Name, numPar))
@@ -141,4 +191,24 @@ func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.
 		topicStore.AddCommitLog(topicResponseData.TopicId, numPar, newCommitLog)
 	}
 	return nil
+}
+
+func parseTopicConfig(configs []topic.CreateTopicConfigResponse) (*TopicConfig, error) {
+	topicConfig := &TopicConfig{MinInsyncReplicas: 1}
+	for _, createTopicConfig := range configs {
+		value := createTopicConfig.Value
+		if value == nil {
+			continue
+		}
+		switch createTopicConfig.Name.String() {
+		case "min.insync.replicas":
+			n, err := strconv.ParseInt(*value, 10, 16)
+			if err != nil {
+				return nil, fmt.Errorf("invalid min.insync.replicas value: %w", err)
+			}
+			topicConfig.MinInsyncReplicas = int16(n)
+		default:
+		}
+	}
+	return topicConfig, nil
 }

@@ -64,6 +64,11 @@ type ICommitLog interface {
 	// Close flushes all pending writes and closes all segments.
 	// After Close is called, any further operations will return an error.
 	Close() error
+
+	// Dir returns the on-disk directory backing this commit log. Used by
+	// sibling files (e.g. producer_state snapshots) that need to live next
+	// to the segment files.
+	Dir() string
 }
 
 type commitLog struct {
@@ -233,6 +238,10 @@ func (c *commitLog) NewestOffset() int64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.nextOffset - 1
+}
+
+func (c *commitLog) Dir() string {
+	return c.dir
 }
 
 func (c *commitLog) Close() error {

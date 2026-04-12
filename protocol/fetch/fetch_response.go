@@ -18,8 +18,93 @@ type FetchResponse struct {
 }
 
 func (f *FetchResponse) Decode(r *protocol.Reader) error {
-	//TODO implement me
-	panic("implement me")
+	var err error
+	if f.ThrottleTimeMs, err = r.ReadInt32(); err != nil {
+		return err
+	}
+	if f.ErrorCode, err = r.ReadInt16(); err != nil {
+		return err
+	}
+	if f.SessionId, err = r.ReadInt32(); err != nil {
+		return err
+	}
+
+	numTopics, err := r.ReadCompactArrayLen()
+	if err != nil {
+		return err
+	}
+	f.Responses = make([]FetchTopicResponse, numTopics)
+	for i := range f.Responses {
+		if err := f.Responses[i].decode(r); err != nil {
+			return err
+		}
+	}
+
+	// response-level tagged fields (may include NodeEndpoints — skip them)
+	return r.ReadTaggedFields()
+}
+
+func (t *FetchTopicResponse) decode(r *protocol.Reader) error {
+	var err error
+	if t.TopicId, err = r.ReadUUID(); err != nil {
+		return err
+	}
+	numPartitions, err := r.ReadCompactArrayLen()
+	if err != nil {
+		return err
+	}
+	t.Partitions = make([]FetchPartitionResponse, numPartitions)
+	for i := range t.Partitions {
+		if err := t.Partitions[i].decode(r); err != nil {
+			return err
+		}
+	}
+	return r.ReadTaggedFields()
+}
+
+func (p *FetchPartitionResponse) decode(r *protocol.Reader) error {
+	var err error
+	if p.PartitionIndex, err = r.ReadInt32(); err != nil {
+		return err
+	}
+	if p.ErrorCode, err = r.ReadInt16(); err != nil {
+		return err
+	}
+	if p.HighWatermark, err = r.ReadInt64(); err != nil {
+		return err
+	}
+	if p.LastStableOffset, err = r.ReadInt64(); err != nil {
+		return err
+	}
+	if p.LogStartOffset, err = r.ReadInt64(); err != nil {
+		return err
+	}
+
+	numAborted, err := r.ReadCompactArrayLen()
+	if err != nil {
+		return err
+	}
+	for i := 0; i < numAborted; i++ {
+		var at AbortedTransaction
+		if at.ProducerId, err = r.ReadInt64(); err != nil {
+			return err
+		}
+		if at.FirstOffset, err = r.ReadInt64(); err != nil {
+			return err
+		}
+		if err = r.ReadTaggedFields(); err != nil {
+			return err
+		}
+		p.AbortedTransactions = append(p.AbortedTransactions, at)
+	}
+
+	if p.PreferredReadReplica, err = r.ReadInt32(); err != nil {
+		return err
+	}
+	if p.Records, err = r.ReadCompactRecords(); err != nil {
+		return err
+	}
+	return r.ReadTaggedFields()
 }
 
 func (f *FetchResponse) ApiKey() int16 {

@@ -43,30 +43,64 @@ func HandleFetchApiKeys(conn net.Conn, brokerContext IBrokerContext, header *pro
 	}
 
 	var topicResults []topicResult
-	//pss := brokerContext.GetPartitionStateStore()
+
+	pss := brokerContext.GetPartitionStateStore()
 
 	for _, t := range fetchRequest.Topics {
 		tr := topicResult{topicId: t.TopicId}
+		topicMeta, _ := brokerContext.GetTopicStore().GetTopic(t.TopicId)
 		for _, part := range t.Partitions {
 			pr := fetch.FetchPartitionResponse{
 				PartitionIndex:       part.Partition,
 				PreferredReadReplica: -1,
 			}
-			//ps := pss.GetPartitionState(t.TopicId, part.Partition)
-			//todo: check leader before fetch
+			if topicMeta == nil {
+				pr.ErrorCode = constant.ErrUnknownTopicOrPartition
+				tr.parts = append(tr.parts, partResult{pr, nil})
+				continue
+			}
+			ps := pss.GetPartitionState(topicMeta.Name.String(), part.Partition)
+			if ps == nil {
+				pr.ErrorCode = constant.ErrUnknownTopicOrPartition
+				tr.parts = append(tr.parts, partResult{pr, nil})
+				continue
+			}
+
+			if ps.LeaderBrokerID != brokerContext.GetBrokerID() {
+				pr.ErrorCode = constant.ErrErrNotLeaderForPartition
+				tr.parts = append(tr.parts, partResult{pr, nil})
+				continue
+			}
+
 			var region *commitlog.RecordsRegion
 			cl := brokerContext.GetTopicStore().GetCommitLog(t.TopicId, part.Partition)
 			if cl == nil {
 				pr.ErrorCode = constant.ErrUnknownTopicOrPartition
-			} else {
-				reg, err := cl.FindRecords(part.FetchOffset, int64(part.PartitionMaxBytes))
-				if err == nil && reg != nil {
-					pr.HighWatermark = reg.LEO
-					pr.LastStableOffset = reg.LEO
-					pr.LogStartOffset = reg.LogStart
-					region = reg
-				}
+				tr.parts = append(tr.parts, partResult{pr, nil})
+				continue
 			}
+
+			isReplicated := fetchRequest.ReplicaState != nil && fetchRequest.ReplicaState.ReplicaId > 0
+			if isReplicated {
+				ps.UpdateReplicaLEO(fetchRequest.ReplicaState.ReplicaId, part.FetchOffset)
+			}
+
+			maxVisible := ps.LEO
+			if !isReplicated {
+				maxVisible = ps.HWM
+			}
+
+			reg, err := cl.FindRecords(part.FetchOffset, int64(part.PartitionMaxBytes))
+			if err == nil && reg != nil {
+				clipped, err := commitlog.ClipRegionToOffset(reg, maxVisible)
+				if err == nil && clipped != nil && clipped.Size > 0 {
+					region = clipped
+				}
+				pr.LogStartOffset = reg.LogStart
+			}
+			pr.HighWatermark = ps.HWM
+			pr.LastStableOffset = ps.HWM
+
 			tr.parts = append(tr.parts, partResult{pr, region})
 		}
 		topicResults = append(topicResults, tr)

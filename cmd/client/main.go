@@ -3,9 +3,11 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -13,8 +15,12 @@ import (
 )
 
 func main() {
+	brokersFlag := flag.String("brokers", "localhost:9092", "comma-separated seed brokers")
+	flag.Parse()
+	seeds := strings.Split(*brokersFlag, ",")
+
 	client, err := kgo.NewClient(
-		kgo.SeedBrokers("localhost:9092"),
+		kgo.SeedBrokers(seeds...),
 		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
 		//kgo.ProducerBatchCompression(kgo.NoCompression()),
 	)
@@ -64,7 +70,7 @@ func main() {
 	}
 
 	consumer, err := kgo.NewClient(
-		kgo.SeedBrokers("localhost:9092"),
+		kgo.SeedBrokers(seeds...),
 		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
 		kgo.ConsumerGroup("orders-group"),                 // ← triggers FindCoordinator
 		kgo.Balancers(kgo.RoundRobinBalancer()),           // ← default
