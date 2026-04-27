@@ -119,9 +119,6 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 
 			if pid >= 0 && ps.Idempotence != nil {
 				ps.Idempotence.Record(pid, epoch, firstSeq, lastSeq, baseOffset)
-				if err := coordinator.SaveProducerStateSnapshot(partitionCommitLog.Dir(), ps.Idempotence.Snapshot()); err != nil {
-					slog.Warn("snapshot save failed", "topic", topicMeta.Name, "partition", partition.Index, "err", err)
-				}
 			}
 
 			lastOffset := baseOffset + int64(len(batch.Records)) - 1

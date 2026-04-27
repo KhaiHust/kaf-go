@@ -11,6 +11,7 @@ import (
 
 	"github.com/KhaiHust/kaf-go/config"
 	"github.com/KhaiHust/kaf-go/constant"
+	"github.com/KhaiHust/kaf-go/coordinator"
 	"github.com/KhaiHust/kaf-go/protocol"
 	metadatapkg "github.com/KhaiHust/kaf-go/protocol/metadata"
 	"github.com/KhaiHust/kaf-go/protocol/topic"
@@ -66,7 +67,7 @@ func HandleCreateTopics(conn net.Conn, brokerContext IBrokerContext, header *pro
 			topicConfig = &TopicConfig{MinInsyncReplicas: 1}
 		}
 
-		_ = createTopicStorage(topicStore, topicData, topicConfig)
+		_ = createTopicStorage(topicStore, pss, brokerContext.GetLogDir(), topicData, topicConfig)
 
 		// StartFollowerFetch must run AFTER AddTopic + createTopicStorage so the
 		// fetcher can resolve the topicId and dial the leader's address.
@@ -152,7 +153,7 @@ func validateTopicData(topicData topic.CreateTopicData) int16 {
 	return 0
 }
 
-func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.CreateTopicResponseData, topicConfig *TopicConfig) error {
+func createTopicStorage(topicStore *storage.TopicStore, pss *coordinator.PartitionStateStore, logDir string, topicResponseData topic.CreateTopicResponseData, topicConfig *TopicConfig) error {
 	commitLogConfig := &config.CommitLogConfig{
 		SegmentMaxBytes: 1024 * 1024 * 100,
 		IndexInterval:   4 * 1024,
@@ -165,8 +166,11 @@ func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.
 		minISR = topicConfig.MinInsyncReplicas
 	}
 
+	if logDir == "" {
+		logDir = LogStorageDataFolder
+	}
 	topicName := topicResponseData.Name.String()
-	topicDir := LogStorageDataFolder + topicName
+	topicDir := filepath.Join(logDir, topicName)
 	meta := storage.TopicMeta{
 		Name:              topicName,
 		TopicId:           topicResponseData.TopicId.String(),
@@ -189,6 +193,14 @@ func createTopicStorage(topicStore *storage.TopicStore, topicResponseData topic.
 		}
 
 		topicStore.AddCommitLog(topicResponseData.TopicId, numPar, newCommitLog)
+
+		if pss != nil {
+			if ps := pss.GetPartitionState(topicName, numPar); ps != nil && ps.Idempotence != nil {
+				psm := coordinator.NewProducerStateManager(newCommitLog.Dir(), ps.Idempotence)
+				ps.ProducerStateManager = psm
+				newCommitLog.SetSegmentRollHook(func(newBase int64) { psm.OnSegmentRoll(newBase) })
+			}
+		}
 	}
 	return nil
 }

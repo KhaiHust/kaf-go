@@ -521,6 +521,55 @@ func (s *Segment) Delete() error {
 	return nil
 }
 
+const headerSizeWithProducerInfo = 57
+
+func (s *Segment) walkBatchHeaders(fromOffset int64, fn func(BatchHeader) error) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	fileInfo, err := s.logFile.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := fileInfo.Size()
+
+	pos := int64(0)
+	for pos+headerSizeWithProducerInfo <= fileSize {
+		var buf [headerSizeWithProducerInfo]byte
+		n, rerr := s.logFile.ReadAt(buf[:], pos)
+		if rerr != nil || n < headerSizeWithProducerInfo {
+			break
+		}
+
+		baseOffset := int64(binary.BigEndian.Uint64(buf[0:8]))
+		batchLength := int32(binary.BigEndian.Uint32(buf[8:12]))
+		totalLen := int64(12) + int64(batchLength)
+		if totalLen <= 0 || pos+totalLen > fileSize {
+			break
+		}
+
+		lastOffsetDelta := int32(binary.BigEndian.Uint32(buf[23:27]))
+		producerId := int64(binary.BigEndian.Uint64(buf[43:51]))
+		producerEpoch := int16(binary.BigEndian.Uint16(buf[51:53]))
+		baseSequence := int32(binary.BigEndian.Uint32(buf[53:57]))
+
+		if baseOffset >= fromOffset {
+			if cberr := fn(BatchHeader{
+				BaseOffset:      baseOffset,
+				LastOffsetDelta: lastOffsetDelta,
+				ProducerId:      producerId,
+				ProducerEpoch:   producerEpoch,
+				BaseSequence:    baseSequence,
+			}); cberr != nil {
+				return cberr
+			}
+		}
+
+		pos += totalLen
+	}
+	return nil
+}
+
 // readBatchMeta17 reads 17 bytes and returns the batch's position,
 // baseOffset, and totalLen. Equivalent to Kafka's nextBatch() which
 // reads HEADER_SIZE_UP_TO_MAGIC bytes into a lazy wrapper.

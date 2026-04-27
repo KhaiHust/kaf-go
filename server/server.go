@@ -191,11 +191,12 @@ func (s *Server) recoverTopic() error {
 				return err
 			}
 
-			// Restore producer dedup state from disk.
 			if ps := s.partitionStateStore.GetPartitionState(meta.Name, partitionIndex); ps != nil && ps.Idempotence != nil {
-				if entries, lerr := coordinator.LoadProducerStateSnapshot(partitionDir); lerr == nil && len(entries) > 0 {
-					ps.Idempotence.Restore(entries)
-					slog.Info("recovered producer state", "topic", meta.Name, "partition", partitionIndex, "producers", len(entries))
+				psm := coordinator.NewProducerStateManager(commitLog.Dir(), ps.Idempotence)
+				ps.ProducerStateManager = psm
+				commitLog.SetSegmentRollHook(func(newBase int64) { psm.OnSegmentRoll(newBase) })
+				if rerr := psm.Recover(commitLogReader{commitLog}); rerr != nil {
+					slog.Warn("recover producer state failed", "topic", meta.Name, "partition", partitionIndex, "err", rerr)
 				}
 			}
 
@@ -247,6 +248,13 @@ func (s *Server) GetPartitionStateStore() *coordinator.PartitionStateStore {
 
 func (s *Server) GetBrokerID() int32 {
 	return s.brokerID
+}
+
+func (s *Server) GetLogDir() string {
+	if s.logDir == "" {
+		return api.LogStorageDataFolder
+	}
+	return s.logDir
 }
 
 func (s *Server) GetAllBrokerIDs() []int32 {
@@ -397,9 +405,11 @@ func (s *Server) createPartitionLog(topicName string, topicId uuid.UUID, partiti
 	_ = s.partitionStateStore.SetLeader(topicName, partitionId, s.brokerID)
 
 	if ps := s.partitionStateStore.GetPartitionState(topicName, partitionId); ps != nil && ps.Idempotence != nil {
-		if entries, lerr := coordinator.LoadProducerStateSnapshot(dir); lerr == nil && len(entries) > 0 {
-			ps.Idempotence.Restore(entries)
-			slog.Info("restored producer state", "topic", topicName, "partition", partitionId, "producers", len(entries))
+		psm := coordinator.NewProducerStateManager(cl.Dir(), ps.Idempotence)
+		ps.ProducerStateManager = psm
+		cl.SetSegmentRollHook(func(newBase int64) { psm.OnSegmentRoll(newBase) })
+		if rerr := psm.Recover(commitLogReader{cl}); rerr != nil {
+			slog.Warn("recover producer state failed", "topic", topicName, "partition", partitionId, "err", rerr)
 		}
 	}
 
@@ -436,4 +446,28 @@ func (s *Server) SetPeers(peers map[int32]string) {
 		s.brokerRegistrar = NewBrokerRegistrar(s, controllerAddr)
 		s.metadataFetcher = NewMetadataFetcher(s, controllerAddr)
 	}
+}
+
+type commitLogReader struct {
+	cl commitlog.ICommitLog
+}
+
+func (r commitLogReader) Dir() string {
+	return r.cl.Dir()
+}
+
+func (r commitLogReader) ActiveSegmentBaseOffset() int64 {
+	return r.cl.ActiveSegmentBaseOffset()
+}
+
+func (r commitLogReader) WalkBatchHeadersFrom(fromOffset int64, fn func(coordinator.SnapshotBatchHeader) error) error {
+	return r.cl.WalkBatchHeadersFrom(fromOffset, func(h commitlog.BatchHeader) error {
+		return fn(coordinator.SnapshotBatchHeader{
+			BaseOffset:      h.BaseOffset,
+			LastOffsetDelta: h.LastOffsetDelta,
+			ProducerId:      h.ProducerId,
+			ProducerEpoch:   h.ProducerEpoch,
+			BaseSequence:    h.BaseSequence,
+		})
+	})
 }

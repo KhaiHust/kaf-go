@@ -3,59 +3,165 @@ package coordinator
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"hash/crc32"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 const (
-	producerStateSnapshotFile  = "producer_state.snapshot"
-	producerStateHeaderSize    = 35
-	producerStateRingSlotBytes = 20
+	producerSnapshotMagic      uint32 = 0x4B41464B
+	producerSnapshotVersion    uint16 = 1
+	producerSnapshotSuffix            = ".producer.snapshot"
+	producerStateHeaderSize           = 35
+	producerStateRingSlotBytes        = 20
 )
 
-func SaveProducerStateSnapshot(dir string, entries []ProducerSnapshotEntry) error {
+var crcCastagnoli = crc32.MakeTable(crc32.Castagnoli)
+
+func snapshotFileName(snapshotOffset int64) string {
+	return fmt.Sprintf("%020d%s", snapshotOffset, producerSnapshotSuffix)
+}
+
+func WriteProducerSnapshot(dir string, snapshotOffset int64, entries []ProducerSnapshotEntry) error {
 	if dir == "" {
 		return nil
 	}
-	path := filepath.Join(dir, producerStateSnapshotFile)
+	path := filepath.Join(dir, snapshotFileName(snapshotOffset))
 	tmp := path + ".tmp"
 
-	cap0 := 4 + len(entries)*(producerStateHeaderSize+IdempotenceRingSize*producerStateRingSlotBytes)
+	cap0 := 4 + 2 + 8 + 4 + 4 + len(entries)*(producerStateHeaderSize+IdempotenceRingSize*producerStateRingSlotBytes)
 	buf := make([]byte, 0, cap0)
+	buf = binary.BigEndian.AppendUint32(buf, producerSnapshotMagic)
+	buf = binary.BigEndian.AppendUint16(buf, producerSnapshotVersion)
+	buf = binary.BigEndian.AppendUint64(buf, uint64(snapshotOffset))
 	buf = binary.BigEndian.AppendUint32(buf, uint32(len(entries)))
 	for _, e := range entries {
 		buf = encodeProducerStateEntry(buf, &e)
 	}
+	checksum := crc32.Checksum(buf, crcCastagnoli)
+	buf = binary.BigEndian.AppendUint32(buf, checksum)
 
-	if err := os.WriteFile(tmp, buf, 0644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
 		return err
+	}
+	if _, werr := f.Write(buf); werr != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return werr
+	}
+	if serr := f.Sync(); serr != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return serr
+	}
+	if cerr := f.Close(); cerr != nil {
+		_ = os.Remove(tmp)
+		return cerr
 	}
 	return os.Rename(tmp, path)
 }
 
-func LoadProducerStateSnapshot(dir string) ([]ProducerSnapshotEntry, error) {
+func LoadLatestProducerSnapshot(dir string, maxBase int64) (int64, []ProducerSnapshotEntry, error) {
 	if dir == "" {
-		return nil, nil
+		return 0, nil, nil
 	}
-	path := filepath.Join(dir, producerStateSnapshotFile)
-	raw, err := os.ReadFile(path)
+	files, err := listSnapshotFiles(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return 0, nil, nil
 		}
+		return 0, nil, err
+	}
+
+	for i := len(files) - 1; i >= 0; i-- {
+		base := files[i]
+		if base > maxBase {
+			continue
+		}
+		entries, derr := decodeSnapshotFile(filepath.Join(dir, snapshotFileName(base)), base)
+		if derr != nil {
+			continue
+		}
+		return base, entries, nil
+	}
+	return 0, nil, nil
+}
+
+func ListProducerSnapshotOffsets(dir string) ([]int64, error) {
+	return listSnapshotFiles(dir)
+}
+
+func DeleteProducerSnapshot(dir string, base int64) error {
+	return os.Remove(filepath.Join(dir, snapshotFileName(base)))
+}
+
+func listSnapshotFiles(dir string) ([]int64, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		return nil, err
 	}
-	if len(raw) < 4 {
+	bases := make([]int64, 0, len(entries))
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
+		}
+		name := ent.Name()
+		if !strings.HasSuffix(name, producerSnapshotSuffix) {
+			continue
+		}
+		prefix := strings.TrimSuffix(name, producerSnapshotSuffix)
+		base, perr := strconv.ParseInt(prefix, 10, 64)
+		if perr != nil {
+			continue
+		}
+		bases = append(bases, base)
+	}
+	sort.Slice(bases, func(i, j int) bool { return bases[i] < bases[j] })
+	return bases, nil
+}
+
+func decodeSnapshotFile(path string, expectedBase int64) ([]ProducerSnapshotEntry, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) < 4+2+8+4+4 {
 		return nil, io.ErrUnexpectedEOF
 	}
-	count := int(binary.BigEndian.Uint32(raw[0:]))
-	off := 4
+
+	body := raw[:len(raw)-4]
+	want := binary.BigEndian.Uint32(raw[len(raw)-4:])
+	if got := crc32.Checksum(body, crcCastagnoli); got != want {
+		return nil, errors.New("snapshot: crc mismatch")
+	}
+
+	off := 0
+	if magic := binary.BigEndian.Uint32(body[off:]); magic != producerSnapshotMagic {
+		return nil, errors.New("snapshot: bad magic")
+	}
+	off += 4
+	if ver := binary.BigEndian.Uint16(body[off:]); ver != producerSnapshotVersion {
+		return nil, fmt.Errorf("snapshot: unsupported version %d", ver)
+	}
+	off += 2
+	storedBase := int64(binary.BigEndian.Uint64(body[off:]))
+	off += 8
+	if storedBase != expectedBase {
+		return nil, fmt.Errorf("snapshot: base offset mismatch (file=%d, header=%d)", expectedBase, storedBase)
+	}
+	count := int(binary.BigEndian.Uint32(body[off:]))
+	off += 4
 
 	entries := make([]ProducerSnapshotEntry, 0, count)
 	for i := 0; i < count; i++ {
-		e, consumed, derr := decodeProducerStateEntry(raw[off:])
+		e, consumed, derr := decodeProducerStateEntry(body[off:])
 		if derr != nil {
 			return nil, derr
 		}

@@ -28,4 +28,5 @@ type IBrokerContext interface {
 	IsController() bool
 	GetAllBrokerIDs() []int32
 	GetPidManager() *coordinator.PidManager
+	GetLogDir() string
 }

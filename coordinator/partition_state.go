@@ -14,13 +14,14 @@ type PartitionState struct {
 	Replicas       []int32
 	ISR            []int32
 
-	LEO          int64
-	HWM          int64
-	ReplicaLEO   map[int32]int64
-	LastCaughtUp map[int32]time.Time
-	Purgatory    *PartitionPurgatory
-	Idempotence  *IdempotenceState
-	mu           *sync.RWMutex
+	LEO                  int64
+	HWM                  int64
+	ReplicaLEO           map[int32]int64
+	LastCaughtUp         map[int32]time.Time
+	Purgatory            *PartitionPurgatory
+	Idempotence          *IdempotenceState
+	ProducerStateManager *ProducerStateManager
+	mu                   *sync.RWMutex
 }
 
 type PartitionStateStore struct {

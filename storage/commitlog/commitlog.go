@@ -26,6 +26,16 @@ type RecordsRegion struct {
 	LogStart   int64 // oldest offset in this log
 }
 
+type BatchHeader struct {
+	BaseOffset      int64
+	LastOffsetDelta int32
+	ProducerId      int64
+	ProducerEpoch   int16
+	BaseSequence    int32
+}
+
+type SegmentRollHook func(newBaseOffset int64)
+
 type ICommitLog interface {
 	// AppendRaw writes raw byte data directly to the commit log without any message framing or metadata.
 	// This is intended for advanced use cases where the caller manages message serialization and framing.
@@ -69,6 +79,12 @@ type ICommitLog interface {
 	// sibling files (e.g. producer_state snapshots) that need to live next
 	// to the segment files.
 	Dir() string
+
+	SetSegmentRollHook(hook SegmentRollHook)
+
+	ActiveSegmentBaseOffset() int64
+
+	WalkBatchHeadersFrom(fromOffset int64, fn func(BatchHeader) error) error
 }
 
 type commitLog struct {
@@ -79,6 +95,7 @@ type commitLog struct {
 	isClosed        bool
 	nextOffset      int64
 	mu              *sync.RWMutex
+	onSegmentRoll   SegmentRollHook
 }
 
 func (c *commitLog) FindRecords(fetchOffset int64, maxBytes int64) (*RecordsRegion, error) {
@@ -123,6 +140,8 @@ func (c *commitLog) AppendRaw(data []byte, recordCount int32) (baseOffset int64,
 		return 0, nil
 	}
 
+	rolled := false
+	var rolledBase int64
 	if c.activeSegment.IsFull() {
 		newSegment, err := NewSegment(c.dir, c.activeSegment.NextOffset(), c.commitLogConfig)
 		if err != nil {
@@ -130,12 +149,18 @@ func (c *commitLog) AppendRaw(data []byte, recordCount int32) (baseOffset int64,
 		}
 		c.segments = append(c.segments, newSegment)
 		c.activeSegment = newSegment
+		rolled = true
+		rolledBase = newSegment.BaseOffset
 	}
 	startOffset := c.nextOffset
 	if err := c.activeSegment.AppendRaw(startOffset, data); err != nil {
 		return 0, err
 	}
 	c.nextOffset += int64(recordCount)
+	if rolled && c.onSegmentRoll != nil {
+		hook := c.onSegmentRoll
+		go hook(rolledBase)
+	}
 	return startOffset, nil
 }
 
@@ -151,6 +176,8 @@ func (c *commitLog) Append(messages []Message) (offset int64, err error) {
 		return 0, nil
 	}
 
+	rolled := false
+	var rolledBase int64
 	if c.activeSegment.IsFull() {
 		newSegment, err := NewSegment(c.dir, c.activeSegment.NextOffset(), c.commitLogConfig)
 		if err != nil {
@@ -158,8 +185,8 @@ func (c *commitLog) Append(messages []Message) (offset int64, err error) {
 		}
 		c.segments = append(c.segments, newSegment)
 		c.activeSegment = newSegment
-
-		//todo: clean up Old segments
+		rolled = true
+		rolledBase = newSegment.BaseOffset
 	}
 
 	startOffset := c.nextOffset
@@ -173,6 +200,11 @@ func (c *commitLog) Append(messages []Message) (offset int64, err error) {
 
 	if err = c.activeSegment.Append(messages); err != nil {
 		return 0, err
+	}
+
+	if rolled && c.onSegmentRoll != nil {
+		hook := c.onSegmentRoll
+		go hook(rolledBase)
 	}
 
 	return startOffset, nil
@@ -242,6 +274,43 @@ func (c *commitLog) NewestOffset() int64 {
 
 func (c *commitLog) Dir() string {
 	return c.dir
+}
+
+func (c *commitLog) SetSegmentRollHook(hook SegmentRollHook) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onSegmentRoll = hook
+}
+
+func (c *commitLog) ActiveSegmentBaseOffset() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.activeSegment == nil {
+		return 0
+	}
+	return c.activeSegment.BaseOffset
+}
+
+func (c *commitLog) WalkBatchHeadersFrom(fromOffset int64, fn func(BatchHeader) error) error {
+	c.mu.RLock()
+	segments := make([]*Segment, len(c.segments))
+	copy(segments, c.segments)
+	c.mu.RUnlock()
+
+	startIdx := 0
+	for i := len(segments) - 1; i >= 0; i-- {
+		if segments[i].BaseOffset <= fromOffset {
+			startIdx = i
+			break
+		}
+	}
+
+	for i := startIdx; i < len(segments); i++ {
+		if err := segments[i].walkBatchHeaders(fromOffset, fn); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *commitLog) Close() error {

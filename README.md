@@ -30,7 +30,7 @@ The long-term target is **KRaft** ([KIP-500](https://cwiki.apache.org/confluence
 - **Kafka wire protocol** — binary framing, compact types, tagged fields, flexible API versions
 - **Producer** — record batches, Snappy compression
 - **Producer durability semantics** — full `acks` contract: `0` (fire-and-forget), `1` (leader-local), `-1` (wait for ISR via per-partition purgatory; HWM-driven release)
-- **Idempotent producer** — `InitProducerId` with block-based PID allocation, per-`(PID, partition)` 5-slot dedup ring, retry short-circuit returns the original `BaseOffset`, snapshot persistence per partition, durable PID lease in `__cluster_metadata`
+- **Idempotent producer** — `InitProducerId` with block-based PID allocation, per-`(PID, partition)` 5-slot dedup ring, retry short-circuit returns the original `BaseOffset`, per-segment-roll snapshot files (`<base>.producer.snapshot`) plus tail-replay on startup, durable PID lease in `__cluster_metadata`
 - **`min.insync.replicas`** — per-topic config; pre-append rejects with `NOT_ENOUGH_REPLICAS` (19); ISR shrink fails parked waiters with `NOT_ENOUGH_REPLICAS_AFTER_APPEND` (20)
 - **ISR / HWM tracking** — leader-side ISRManager (500ms ticker, 10s lag threshold) shrinks/expands ISR; HWM = `min(LEO across ISR)`; fetch responses clip to HWM for consumers, LEO for replica fetchers
 - **Consumer groups** — full lifecycle: FindCoordinator → JoinGroup → SyncGroup → Heartbeat → OffsetFetch → OffsetCommit → LeaveGroup
@@ -147,7 +147,8 @@ Sample output:
 │   ├── topic/          # CreateTopics request/response
 │   └── types/          # Compact types, varints, compression
 ├── coordinator/        # Consumer group state, metadata log, partition state,
-│                       #   purgatory, idempotence ring, PID manager, snapshot
+│                       #   purgatory, idempotence ring, PID manager,
+│                       #   producer state manager (segment-roll snapshots)
 ├── storage/
 │   └── commitlog/      # Log segments, offset index, HWM/LEO clip
 ├── server/             # TCP server, MetadataFetcher, ReplicaFetcher,
@@ -243,11 +244,22 @@ Client (enable.idempotence=true)         Controller
    │                                          unknown PID + seq=0 → accept
    │                                          AppendRaw → baseOffset=B
    │                                          Idempotence.Record(...)  (ring slot stamped)
-   │                                          SaveProducerStateSnapshot (write-through)
    │◄── BaseOffset=B ────────────────────────
    │
    │── Produce(retry same batch) ──────────► Validate: seq ≤ LastSeq AND in ring
    │◄── BaseOffset=B  (dup short-circuit)    NO second AppendRaw
+
+When the active segment fills:
+   commitLog rolls to <newBase>.log
+     → SegmentRollHook fires (off the produce path)
+     → ProducerStateManager writes <newBase>.producer.snapshot
+     → prunes older snapshots, keeping the last 2
+
+On broker restart (per partition):
+   ProducerStateManager.Recover:
+     → load latest <base>.producer.snapshot ≤ activeBase
+     → WalkBatchHeadersFrom(scanFrom, ...) replays the active segment tail,
+       calling Idempotence.Record for each batch with PID ≥ 0
 ```
 
 ---
