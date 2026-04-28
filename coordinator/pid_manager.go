@@ -3,6 +3,7 @@ package coordinator
 import (
 	"sync"
 
+	"github.com/KhaiHust/kaf-go/metrics"
 	metadatapkg "github.com/KhaiHust/kaf-go/protocol/metadata"
 )
 
@@ -74,5 +75,6 @@ func (m *PidManager) leaseNextBlockLocked() error {
 		m.nextBase = m.blockEnd
 	}
 	m.blockEnd = newEnd
+	metrics.PIDBlocksLeased.Inc()
 	return nil
 }

@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,16 +19,21 @@ import (
 	"github.com/KhaiHust/kaf-go/api"
 	"github.com/KhaiHust/kaf-go/config"
 	"github.com/KhaiHust/kaf-go/coordinator"
+	"github.com/KhaiHust/kaf-go/metrics"
 	metadatapkg "github.com/KhaiHust/kaf-go/protocol/metadata"
 	"github.com/KhaiHust/kaf-go/storage"
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
 	"github.com/gofrs/uuid/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Server struct {
 	addr                  string
+	advertisedHost        string // host this broker advertises in Metadata responses; empty → "localhost"
 	logDir                string
 	brokerID              int32
+	metricsPort           int
+	metricsServer         *http.Server
 	topicStore            *storage.TopicStore
 	groupStore            *coordinator.GroupStore
 	partitionStateStore   *coordinator.PartitionStateStore
@@ -44,11 +51,13 @@ type Server struct {
 	quit                  chan struct{}
 }
 
-func NewServer(addr, logDir string, brokerID int32) *Server {
+func NewServer(addr, logDir string, brokerID int32, advertisedHost string, metricsPort int) *Server {
 	s := &Server{
 		addr:                addr,
+		advertisedHost:      advertisedHost,
 		logDir:              logDir,
 		brokerID:            brokerID,
+		metricsPort:         metricsPort,
 		topicStore:          storage.NewTopicStore(),
 		groupStore:          coordinator.NewGroupStore(),
 		partitionStateStore: coordinator.NewPartitionStateStore(),
@@ -60,8 +69,18 @@ func NewServer(addr, logDir string, brokerID int32) *Server {
 	}
 	s.replicaFetcherManager = NewReplicaFetcherManager(s)
 	// Register this broker in its own registry so IsController() works immediately.
-	s.brokerRegistry.RegisterBroker(brokerID, "localhost", parsePort(addr))
+	s.brokerRegistry.RegisterBroker(brokerID, s.AdvertisedHost(), parsePort(addr))
 	return s
+}
+
+// AdvertisedHost returns the host this broker advertises in Metadata / FindCoordinator
+// responses and BrokerRegistration to the controller. Falls back to "localhost" when
+// unset so single-host development workflows keep working.
+func (s *Server) AdvertisedHost() string {
+	if s.advertisedHost != "" {
+		return s.advertisedHost
+	}
+	return "localhost"
 }
 
 func parsePort(addr string) int32 {
@@ -100,6 +119,8 @@ func (s *Server) Start() error {
 	s.isrManager = NewISRManager(s)
 	go s.isrManager.Run()
 
+	s.startMetricsServer()
+
 	return nil
 }
 
@@ -107,9 +128,33 @@ func (s *Server) Stop() {
 	if s.isrManager != nil {
 		s.isrManager.Stop()
 	}
+	if s.metricsServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = s.metricsServer.Shutdown(ctx)
+		cancel()
+	}
 	s.listener.Close()
 	close(s.quit)
 	s.wg.Wait()
+}
+
+// startMetricsServer exposes /metrics on s.metricsPort. metricsPort==0 disables.
+func (s *Server) startMetricsServer() {
+	if s.metricsPort == 0 {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	s.metricsServer = &http.Server{
+		Addr:    fmt.Sprintf(":%d", s.metricsPort),
+		Handler: mux,
+	}
+	go func() {
+		slog.Info("metrics: listening", "port", s.metricsPort)
+		if err := s.metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Warn("metrics server error", "err", err)
+		}
+	}()
 }
 
 func (s *Server) acceptLoop() {
@@ -193,8 +238,16 @@ func (s *Server) recoverTopic() error {
 
 			if ps := s.partitionStateStore.GetPartitionState(meta.Name, partitionIndex); ps != nil && ps.Idempotence != nil {
 				psm := coordinator.NewProducerStateManager(commitLog.Dir(), ps.Idempotence)
+				psm.SetLabels(meta.Name, partitionIndex)
 				ps.ProducerStateManager = psm
-				commitLog.SetSegmentRollHook(func(newBase int64) { psm.OnSegmentRoll(newBase) })
+				topicName := meta.Name
+				partIdx := partitionIndex
+				cl := commitLog
+				cl.SetSegmentRollHook(func(newBase int64) {
+					psm.OnSegmentRoll(newBase)
+					metrics.ActiveSegments.WithLabelValues(topicName, metrics.FormatPartition(partIdx)).Set(float64(cl.NumSegments()))
+				})
+				metrics.ActiveSegments.WithLabelValues(topicName, metrics.FormatPartition(partIdx)).Set(float64(cl.NumSegments()))
 				if rerr := psm.Recover(commitLogReader{commitLog}); rerr != nil {
 					slog.Warn("recover producer state failed", "topic", meta.Name, "partition", partitionIndex, "err", rerr)
 				}
@@ -406,8 +459,16 @@ func (s *Server) createPartitionLog(topicName string, topicId uuid.UUID, partiti
 
 	if ps := s.partitionStateStore.GetPartitionState(topicName, partitionId); ps != nil && ps.Idempotence != nil {
 		psm := coordinator.NewProducerStateManager(cl.Dir(), ps.Idempotence)
+		psm.SetLabels(topicName, partitionId)
 		ps.ProducerStateManager = psm
-		cl.SetSegmentRollHook(func(newBase int64) { psm.OnSegmentRoll(newBase) })
+		clRef := cl
+		topic := topicName
+		part := partitionId
+		clRef.SetSegmentRollHook(func(newBase int64) {
+			psm.OnSegmentRoll(newBase)
+			metrics.ActiveSegments.WithLabelValues(topic, metrics.FormatPartition(part)).Set(float64(clRef.NumSegments()))
+		})
+		metrics.ActiveSegments.WithLabelValues(topic, metrics.FormatPartition(part)).Set(float64(clRef.NumSegments()))
 		if rerr := psm.Recover(commitLogReader{cl}); rerr != nil {
 			slog.Warn("recover producer state failed", "topic", topicName, "partition", partitionId, "err", rerr)
 		}

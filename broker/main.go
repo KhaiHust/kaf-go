@@ -40,11 +40,13 @@ func main() {
 	port := flag.Int("port", int(brokerConfig.Port), "Broker port")
 	logDir := flag.String("log-dir", "var/log", "Directory for log storage")
 	peersFlag := flag.String("peers", "", `Peer brokers, e.g. "2=localhost:9093,3=localhost:9094"`)
+	advertisedHost := flag.String("advertised-host", "", `Host advertised to clients/peers in Metadata + BrokerRegistration. Defaults to "localhost". Set to the container hostname (e.g. "kaf1") in Docker.`)
+	metricsPort := flag.Int("metrics-port", 9100, "Port for Prometheus /metrics HTTP endpoint. 0 disables.")
 	flag.Parse()
 
 	peers := parsePeers(*peersFlag)
 
-	server := server2.NewServer(fmt.Sprintf(":%d", *port), *logDir, int32(*brokerId))
+	server := server2.NewServer(fmt.Sprintf(":%d", *port), *logDir, int32(*brokerId), *advertisedHost, *metricsPort)
 	server.SetPeers(peers)
 
 	err := server.Start()

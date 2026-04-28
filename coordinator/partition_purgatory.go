@@ -2,11 +2,15 @@ package coordinator
 
 import (
 	"sync"
+
+	"github.com/KhaiHust/kaf-go/metrics"
 )
 
 type PartitionPurgatory struct {
-	waiters []*PartitionAppendWaiter
-	mu      sync.Mutex
+	waiters   []*PartitionAppendWaiter
+	mu        sync.Mutex
+	topic     string
+	partition string
 }
 
 func NewPartitionPurgatory() *PartitionPurgatory {
@@ -16,10 +20,30 @@ func NewPartitionPurgatory() *PartitionPurgatory {
 	}
 }
 
+// SetLabels attaches topic/partition labels for the purgatory_depth gauge.
+// Optional — unset purgatories simply skip publishing.
+func (p *PartitionPurgatory) SetLabels(topic string, partition int32) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.topic = topic
+	p.partition = metrics.FormatPartition(partition)
+}
+
+func (p *PartitionPurgatory) publishDepthLocked() {
+	if p.topic == "" {
+		return
+	}
+	metrics.PurgatoryDepth.WithLabelValues(p.topic, p.partition).Set(float64(len(p.waiters)))
+}
+
 func (p *PartitionPurgatory) Add(w *PartitionAppendWaiter) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.waiters = append(p.waiters, w)
+	p.publishDepthLocked()
 }
 
 func (p *PartitionPurgatory) CompleteUpTo(hwm int64) {
@@ -38,6 +62,7 @@ func (p *PartitionPurgatory) CompleteUpTo(hwm int64) {
 		}
 	}
 	p.waiters = remaining
+	p.publishDepthLocked()
 }
 
 func (p *PartitionPurgatory) FailAll(err error) {
@@ -51,4 +76,6 @@ func (p *PartitionPurgatory) FailAll(err error) {
 		close(w.Done)
 	}
 	p.waiters = p.waiters[:0]
+	metrics.PurgatoryFailAll.Inc()
+	p.publishDepthLocked()
 }

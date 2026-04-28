@@ -31,7 +31,8 @@ const (
 	ErrInvalidRequiredAcks      = 72
 	ErrStaleBrokerEpoch         = 77
 	ErrOutOfOrderSequenceNumber = 90
-	ErrNotController            = 116
+	ErrNotController            = 41
+	ErrUnknownControllerID      = 116
 )
 
 func IsError(err error) bool {

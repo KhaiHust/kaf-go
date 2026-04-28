@@ -1,12 +1,12 @@
 package server
 
 import (
-	"fmt"
 	"log/slog"
 	"net"
 
 	"github.com/KhaiHust/kaf-go/api"
 	"github.com/KhaiHust/kaf-go/constant"
+	"github.com/KhaiHust/kaf-go/metrics"
 	"github.com/KhaiHust/kaf-go/protocol"
 )
 
@@ -20,7 +20,9 @@ func NewConn(conn net.Conn, server *Server) *Conn {
 }
 
 func (c *Conn) handle() {
+	metrics.OpenConnections.Inc()
 	defer func() {
+		metrics.OpenConnections.Dec()
 		c.NetConn.Close()
 		slog.Info("connection closed")
 	}()
@@ -31,11 +33,6 @@ func (c *Conn) handle() {
 			return
 		}
 
-		slog.Info("raw data received",
-			"bytes", fmt.Sprintf("%x", framing),
-			"length", len(framing),
-		)
-
 		reader := protocol.NewReader(framing)
 		var requestHeader protocol.RequestHeader
 		if err = requestHeader.Decode(reader); err != nil {
@@ -44,15 +41,12 @@ func (c *Conn) handle() {
 		}
 
 		apiKey := requestHeader.ApiKey
-		apiVersion := requestHeader.ApiVersion
-		slog.Info(fmt.Sprintf("api key: %v, version: %v", apiKey, apiVersion))
+		_ = requestHeader.ApiVersion
 		c.HandleRequest(apiKey, &requestHeader, reader)
 	}
 }
 
 func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reader *protocol.Reader) {
-	slog.Info(fmt.Sprintf("api key: %v", apiKey))
-	//var resp []byte
 	switch apiKey {
 	case constant.ApiKeyProduce:
 		err := api.HandleProduceApiKeys(c.NetConn, c.Server, header, reader)
@@ -80,7 +74,7 @@ func (c *Conn) HandleRequest(apiKey int16, header *protocol.RequestHeader, reade
 			slog.Error("handle offset fetch failed: %v", err)
 		}
 	case constant.ApiFindCoordinator:
-		err := api.HandleFindCoordinatorApi(c.NetConn, header, reader)
+		err := api.HandleFindCoordinatorApi(c.NetConn, header, reader, c.Server)
 		if err != nil {
 			slog.Error("handle find coordinator failed: %v", err)
 		}

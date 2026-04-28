@@ -1,0 +1,85 @@
+# JMX-exporter rules for Apache Kafka.
+# Connects to Kafka's JMX endpoint (host/port from JMX_HOST/JMX_PORT env)
+# and exposes metrics on port 5556 in Prometheus format.
+#
+# Kept minimal — covers the metrics the Grafana dashboards reference.
+# Full reference: https://github.com/prometheus/jmx_exporter/blob/main/example_configs/kafka-2_0_0.yml
+
+hostPort: $JMX_HOST:$JMX_PORT
+ssl: false
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+
+whitelistObjectNames:
+  - kafka.server:type=BrokerTopicMetrics,name=*
+  - kafka.server:type=BrokerTopicMetrics,name=*,topic=*
+  - kafka.server:type=ReplicaManager,name=*
+  - kafka.server:type=ReplicaFetcherManager,name=MaxLag,*
+  - kafka.controller:type=KafkaController,name=*
+  - kafka.network:type=RequestMetrics,name=RequestsPerSec,request=*
+  - kafka.network:type=RequestMetrics,name=TotalTimeMs,request=*
+  - kafka.log:type=LogFlushStats,name=LogFlushRateAndTimeMs
+  - java.lang:type=Memory
+  - java.lang:type=GarbageCollector,name=*
+  - java.lang:type=OperatingSystem
+  - kafka.cluster:type=Partition,name=UnderReplicated,*
+
+rules:
+  # BrokerTopicMetrics — global rates (BytesIn, BytesOut, MessagesIn, etc.)
+  - pattern: kafka.server<type=BrokerTopicMetrics, name=(.+)><>(Count|MeanRate|OneMinuteRate|FifteenMinuteRate)
+    name: kafka_server_brokertopicmetrics_$1_$2
+    type: GAUGE
+
+  # Per-topic BrokerTopicMetrics
+  - pattern: kafka.server<type=BrokerTopicMetrics, name=(.+), topic=(.+)><>(Count|OneMinuteRate)
+    name: kafka_server_brokertopicmetrics_$1_$3
+    labels:
+      topic: "$2"
+    type: GAUGE
+
+  # Request latency percentiles per API
+  - pattern: kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(.+)><>(\d+)thPercentile
+    name: kafka_network_requestmetrics_totaltimems_p$2
+    labels:
+      request: "$1"
+    type: GAUGE
+  - pattern: kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(.+)><>Mean
+    name: kafka_network_requestmetrics_totaltimems_mean
+    labels:
+      request: "$1"
+    type: GAUGE
+
+  # Requests/sec by API
+  - pattern: kafka.network<type=RequestMetrics, name=RequestsPerSec, request=(.+)><>OneMinuteRate
+    name: kafka_network_requestmetrics_requestspersec
+    labels:
+      request: "$1"
+    type: GAUGE
+
+  # Replica manager: ISR shrink/expand, leader count, under-replicated partitions
+  - pattern: kafka.server<type=ReplicaManager, name=(.+)><>Value
+    name: kafka_server_replicamanager_$1
+    type: GAUGE
+
+  # Controller state
+  - pattern: kafka.controller<type=KafkaController, name=(.+)><>Value
+    name: kafka_controller_$1
+    type: GAUGE
+
+  # Partition under-replication flag
+  - pattern: kafka.cluster<type=Partition, name=UnderReplicated, topic=(.+), partition=(\d+)><>Value
+    name: kafka_cluster_partition_underreplicated
+    labels:
+      topic: "$1"
+      partition: "$2"
+    type: GAUGE
+
+  # JVM
+  - pattern: java.lang<type=Memory><HeapMemoryUsage>(\w+)
+    name: jvm_memory_heap_$1
+    type: GAUGE
+  - pattern: java.lang<type=GarbageCollector, name=(.+)><>(CollectionCount|CollectionTime)
+    name: jvm_gc_$2
+    labels:
+      gc: "$1"
+    type: COUNTER

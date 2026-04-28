@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: apache-kafka
+
+scrape_configs:
+  # JMX exporter sidecars — the official Confluent Kafka JMX→Prometheus bridge.
+  - job_name: kafka-brokers
+    static_configs:
+      - targets: ["jmx1:5556", "jmx2:5556", "jmx3:5556"]
+        labels: { role: broker }
+
+  - job_name: loadgen
+    static_configs:
+      - targets: ["loadgen:8090"]
+        labels: { role: client }
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node_exporter:9100"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

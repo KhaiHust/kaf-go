@@ -1,0 +1,12 @@
+# Local Docker volumes (mapped via Docker named volumes; this is just defensive)
+data/
+volumes/
+
+# Loadgen artefacts
+loadgen/loadgen
+loadgen/go.sum
+
+# Test results
+results/*.csv
+results/*.png
+!results/.gitkeep

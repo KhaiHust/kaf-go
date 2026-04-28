@@ -1,0 +1,32 @@
+# Build context: the kaf-go repo root (parent of load-test/).
+# Invoked from docker-compose.kaf.yml with `context: ..`.
+
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+
+# Cache module downloads on a separate layer.
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Source.
+COPY . .
+
+# Static binary, ARM64-native on Apple Silicon.
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/kaf-broker \
+    ./broker/
+
+# Pre-create /data with nonroot ownership (UID/GID 65532 in distroless:nonroot)
+# so an empty named volume mounted there inherits these perms on first init.
+# Distroless has no shell, so we stage the dir from the build image.
+RUN mkdir -p /out/data && chown 65532:65532 /out/data
+
+# Distroless static is ~2 MB; runs the same binary on amd64/arm64.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/kaf-broker /kaf-broker
+COPY --from=build --chown=nonroot:nonroot /out/data /data
+EXPOSE 9092
+USER nonroot:nonroot
+ENTRYPOINT ["/kaf-broker"]

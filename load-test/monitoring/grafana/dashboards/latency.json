@@ -1,0 +1,116 @@
+{
+  "annotations": { "list": [] },
+  "description": "Server-side produce/fetch/purgatory latency. Compare against loadgen-side panels in the system dashboard for client-vs-server overhead.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Produce latency p50/p95/p99 by acks",
+      "id": 1,
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(kaf_produce_latency_seconds_bucket[30s])) by (le, acks))",
+          "legendFormat": "p50 acks={{acks}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(kaf_produce_latency_seconds_bucket[30s])) by (le, acks))",
+          "legendFormat": "p95 acks={{acks}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(kaf_produce_latency_seconds_bucket[30s])) by (le, acks))",
+          "legendFormat": "p99 acks={{acks}}",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Fetch latency p50/p95/p99 by role",
+      "id": 2,
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(kaf_fetch_latency_seconds_bucket[30s])) by (le, role))",
+          "legendFormat": "p50 role={{role}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(kaf_fetch_latency_seconds_bucket[30s])) by (le, role))",
+          "legendFormat": "p95 role={{role}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(kaf_fetch_latency_seconds_bucket[30s])) by (le, role))",
+          "legendFormat": "p99 role={{role}}",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Purgatory wait p50/p95/p99 (acks=-1)",
+      "id": 3,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(kaf_purgatory_wait_seconds_bucket[30s])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(kaf_purgatory_wait_seconds_bucket[30s])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(kaf_purgatory_wait_seconds_bucket[30s])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Loadgen client p99 (overlay sanity check)",
+      "id": 4,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(loadgen_produce_latency_seconds_bucket[30s])) by (le, acks))",
+          "legendFormat": "client p99 acks={{acks}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["kaf-go", "load-test", "broker"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "kaf-go — broker latency",
+  "uid": "kaf-latency",
+  "version": 1,
+  "weekStart": ""
+}

@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: kaf-go
+
+scrape_configs:
+  # kaf-go broker /metrics — wired in Day 5 via the metrics package + promhttp.
+  # Each broker exposes :9100/metrics in addition to the Kafka API on :9092.
+  - job_name: kaf-brokers
+    static_configs:
+      - targets: ["kaf1:9100", "kaf2:9100", "kaf3:9100"]
+        labels: { role: broker }
+
+  # Loadgen client-side metrics (request latency observed by franz-go).
+  - job_name: loadgen
+    static_configs:
+      - targets: ["loadgen:8090"]
+        labels: { role: client }
+
+  # Per-container CPU/RAM/IO/network.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  # Host-level metrics (the Docker VM, on macOS — useful for total disk IO).
+  - job_name: node
+    static_configs:
+      - targets: ["node_exporter:9100"]
+
+  # Prometheus self-scrape so Grafana can render Prom-internal panels.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

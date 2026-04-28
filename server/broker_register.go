@@ -190,7 +190,7 @@ func (br *BrokerRegistrar) ownHostPort() (string, int32) {
 	parts := strings.SplitN(addr, ":", 2)
 	host := parts[0]
 	if host == "" || host == "0.0.0.0" {
-		host = "localhost"
+		host = br.server.AdvertisedHost()
 	}
 	port := int32(9092)
 	if len(parts) == 2 {

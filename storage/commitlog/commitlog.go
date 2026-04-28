@@ -84,6 +84,9 @@ type ICommitLog interface {
 
 	ActiveSegmentBaseOffset() int64
 
+	// NumSegments returns the current number of segments (active + sealed).
+	NumSegments() int
+
 	WalkBatchHeadersFrom(fromOffset int64, fn func(BatchHeader) error) error
 }
 
@@ -289,6 +292,12 @@ func (c *commitLog) ActiveSegmentBaseOffset() int64 {
 		return 0
 	}
 	return c.activeSegment.BaseOffset
+}
+
+func (c *commitLog) NumSegments() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.segments)
 }
 
 func (c *commitLog) WalkBatchHeadersFrom(fromOffset int64, fn func(BatchHeader) error) error {

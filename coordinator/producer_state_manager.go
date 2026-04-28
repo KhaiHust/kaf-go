@@ -2,6 +2,8 @@ package coordinator
 
 import (
 	"log/slog"
+
+	"github.com/KhaiHust/kaf-go/metrics"
 )
 
 const defaultRetainSnapshots = 2
@@ -22,6 +24,8 @@ type CommitLogReader interface {
 
 type ProducerStateManager struct {
 	dir             string
+	topic           string
+	partition       int32
 	state           *IdempotenceState
 	retainSnapshots int
 }
@@ -34,6 +38,16 @@ func NewProducerStateManager(dir string, state *IdempotenceState) *ProducerState
 	}
 }
 
+// SetLabels attaches topic+partition for metric labelling. Optional; callers that
+// don't set this still produce snapshots, just without per-partition gauges.
+func (m *ProducerStateManager) SetLabels(topic string, partition int32) {
+	if m == nil {
+		return
+	}
+	m.topic = topic
+	m.partition = partition
+}
+
 func (m *ProducerStateManager) OnSegmentRoll(newBase int64) {
 	if m == nil || m.state == nil {
 		return
@@ -42,6 +56,9 @@ func (m *ProducerStateManager) OnSegmentRoll(newBase int64) {
 	if err := WriteProducerSnapshot(m.dir, newBase, entries); err != nil {
 		slog.Warn("producer snapshot write failed", "dir", m.dir, "base", newBase, "err", err)
 		return
+	}
+	if m.topic != "" {
+		metrics.SnapshotWrites.WithLabelValues(m.topic, metrics.FormatPartition(m.partition)).Inc()
 	}
 	m.pruneOldSnapshots(newBase)
 }

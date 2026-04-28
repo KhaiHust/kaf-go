@@ -12,6 +12,7 @@ import (
 	"github.com/KhaiHust/kaf-go/config"
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/coordinator"
+	"github.com/KhaiHust/kaf-go/metrics"
 	"github.com/KhaiHust/kaf-go/protocol"
 	metadatapkg "github.com/KhaiHust/kaf-go/protocol/metadata"
 	"github.com/KhaiHust/kaf-go/protocol/topic"
@@ -197,8 +198,16 @@ func createTopicStorage(topicStore *storage.TopicStore, pss *coordinator.Partiti
 		if pss != nil {
 			if ps := pss.GetPartitionState(topicName, numPar); ps != nil && ps.Idempotence != nil {
 				psm := coordinator.NewProducerStateManager(newCommitLog.Dir(), ps.Idempotence)
+				psm.SetLabels(topicName, numPar)
 				ps.ProducerStateManager = psm
-				newCommitLog.SetSegmentRollHook(func(newBase int64) { psm.OnSegmentRoll(newBase) })
+				cl := newCommitLog
+				topic := topicName
+				part := numPar
+				cl.SetSegmentRollHook(func(newBase int64) {
+					psm.OnSegmentRoll(newBase)
+					metrics.ActiveSegments.WithLabelValues(topic, metrics.FormatPartition(part)).Set(float64(cl.NumSegments()))
+				})
+				metrics.ActiveSegments.WithLabelValues(topic, metrics.FormatPartition(part)).Set(float64(cl.NumSegments()))
 			}
 		}
 	}

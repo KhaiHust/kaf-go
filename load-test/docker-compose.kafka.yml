@@ -1,0 +1,223 @@
+# 3-broker Apache Kafka 3.8 KRaft cluster + matching monitoring stack.
+# Run with --project-name kafka so Docker doesn't try to merge volumes/networks
+# with the kaf-go cluster:
+#
+#   docker compose -p kafka -f docker-compose.kafka.yml up -d
+#
+# Settings mirror docker-compose.kaf.yml (RF=3, minISR=2, segment=100MiB)
+# at the same 2-vCPU CPU cap. Memory is 2 GiB (JVM floor — kaf-go runs in 256 MiB).
+
+x-kafka-broker: &kafka-broker
+  image: apache/kafka:3.8.0
+  restart: unless-stopped
+  networks: [kafka-net]
+  environment: &kafka-env
+    KAFKA_PROCESS_ROLES: "broker,controller"
+    KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+    KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+    KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+    KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka1:9093,2@kafka2:9093,3@kafka3:9093"
+    KAFKA_NUM_PARTITIONS: "6"
+    KAFKA_DEFAULT_REPLICATION_FACTOR: "3"
+    KAFKA_MIN_INSYNC_REPLICAS: "2"
+    KAFKA_LOG_SEGMENT_BYTES: "104857600"          # 100 MiB — match kaf-go
+    KAFKA_LOG_RETENTION_BYTES: "-1"               # disable retention for benchmark
+    KAFKA_LOG_RETENTION_MS: "-1"
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+    KAFKA_HEAP_OPTS: "-Xmx1536m -Xms1536m"        # cap JVM heap so the 2 GiB cgroup limit is real
+    CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"          # any valid base64 UUID; keep stable across runs
+    # JMX for the prometheus jmx_exporter sidecars
+    KAFKA_JMX_PORT: "9999"
+    KAFKA_JMX_HOSTNAME: "0.0.0.0"
+    KAFKA_OPTS: ""
+  deploy:
+    resources:
+      limits:
+        cpus: "2.0"
+        memory: 2G
+
+services:
+  kafka1:
+    <<: *kafka-broker
+    container_name: kafka1
+    hostname: kafka1
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: "1"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka1:9092"
+    ports:
+      - "19092:9092"
+    volumes:
+      - kafka1-data:/var/lib/kafka/data
+
+  kafka2:
+    <<: *kafka-broker
+    container_name: kafka2
+    hostname: kafka2
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: "2"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka2:9092"
+    ports:
+      - "19093:9092"
+    volumes:
+      - kafka2-data:/var/lib/kafka/data
+
+  kafka3:
+    <<: *kafka-broker
+    container_name: kafka3
+    hostname: kafka3
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: "3"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka3:9092"
+    ports:
+      - "19094:9092"
+    volumes:
+      - kafka3-data:/var/lib/kafka/data
+
+  # JMX exporters: one sidecar per broker, scraping JMX → exposing /metrics.
+  # The bitnami/jmx-exporter image runs as standalone HTTP server.
+  jmx1:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx1
+    restart: unless-stopped
+    command: ["5556", "/etc/jmx-exporter/kafka.yml"]
+    volumes:
+      - ./monitoring/jmx-kafka.yml:/etc/jmx-exporter/kafka.yml:ro
+    environment:
+      - JMX_HOST=kafka1
+      - JMX_PORT=9999
+    networks: [kafka-net]
+    depends_on: [kafka1]
+
+  jmx2:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx2
+    restart: unless-stopped
+    command: ["5556", "/etc/jmx-exporter/kafka.yml"]
+    volumes:
+      - ./monitoring/jmx-kafka.yml:/etc/jmx-exporter/kafka.yml:ro
+    environment:
+      - JMX_HOST=kafka2
+      - JMX_PORT=9999
+    networks: [kafka-net]
+    depends_on: [kafka2]
+
+  jmx3:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx3
+    restart: unless-stopped
+    command: ["5556", "/etc/jmx-exporter/kafka.yml"]
+    volumes:
+      - ./monitoring/jmx-kafka.yml:/etc/jmx-exporter/kafka.yml:ro
+    environment:
+      - JMX_HOST=kafka3
+      - JMX_PORT=9999
+    networks: [kafka-net]
+    depends_on: [kafka3]
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus-kafka
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus-kafka.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=24h"
+    ports:
+      - "9090:9090"
+    networks: [kafka-net]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana-kafka
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks: [kafka-net]
+    depends_on: [prometheus]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor-kafka
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8080:8080"
+    networks: [kafka-net]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: node_exporter-kafka
+    restart: unless-stopped
+    pid: host
+    volumes:
+      - "/:/host:ro,rslave"
+    command:
+      - "--path.rootfs=/host"
+    ports:
+      - "9200:9100"
+    networks: [kafka-net]
+
+  loadgen:
+    build:
+      context: ./loadgen
+      dockerfile: ../Dockerfile.loadgen
+    image: loadgen:local
+    container_name: loadgen-kafka
+    profiles: ["bench"]
+    networks: [kafka-net]
+    depends_on: [kafka1, kafka2, kafka3]
+    ports:
+      - "8090:8090"
+    command:
+      - "-brokers=kafka1:9092,kafka2:9092,kafka3:9092"
+      - "-topic=loadtest"
+      - "-workers=8"
+      - "-record-size=1024"
+      - "-acks=-1"
+      - "-idempotent=true"
+      - "-duration=60s"
+      - "-warmup=10s"
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 512M }
+
+volumes:
+  kafka1-data:
+  kafka2-data:
+  kafka3-data:
+  prom-data:
+  grafana-data:
+
+networks:
+  kafka-net:
+    driver: bridge

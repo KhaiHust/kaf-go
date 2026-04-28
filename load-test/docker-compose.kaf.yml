@@ -1,0 +1,183 @@
+# 3-broker kaf-go cluster + Prometheus / Grafana / cAdvisor / node_exporter.
+#
+# Build context for the broker is the kaf-go repo root (..) so the Dockerfile
+# can see go.mod and the source tree.
+#
+# Run:
+#   cd load-test
+#   docker compose -f docker-compose.kaf.yml up -d --build
+#   open http://localhost:3000   (Grafana, anonymous viewer)
+#
+# Tear down:
+#   docker compose -f docker-compose.kaf.yml down -v   # -v wipes volumes
+
+x-kaf-broker: &kaf-broker
+  build:
+    context: ..
+    dockerfile: load-test/Dockerfile.kaf-go
+  image: kaf-go:local
+  restart: unless-stopped
+  networks: [kaf-net]
+  deploy:
+    resources:
+      limits:
+        cpus: "2.0"
+        memory: 256M
+
+services:
+  kaf1:
+    <<: *kaf-broker
+    container_name: kaf1
+    hostname: kaf1
+    command:
+      - "-broker-id=1"
+      - "-port=9092"
+      - "-advertised-host=kaf1"
+      - "-peers=2=kaf2:9092,3=kaf3:9092"
+      - "-log-dir=/data"
+    ports:
+      - "9092:9092"      # client-facing (Kafka API)
+    volumes:
+      - kaf1-data:/data
+
+  kaf2:
+    <<: *kaf-broker
+    container_name: kaf2
+    hostname: kaf2
+    command:
+      - "-broker-id=2"
+      - "-port=9092"
+      - "-advertised-host=kaf2"
+      - "-peers=1=kaf1:9092,3=kaf3:9092"
+      - "-log-dir=/data"
+    ports:
+      - "9093:9092"
+    volumes:
+      - kaf2-data:/data
+
+  kaf3:
+    <<: *kaf-broker
+    container_name: kaf3
+    hostname: kaf3
+    command:
+      - "-broker-id=3"
+      - "-port=9092"
+      - "-advertised-host=kaf3"
+      - "-peers=1=kaf1:9092,2=kaf2:9092"
+      - "-log-dir=/data"
+    ports:
+      - "9094:9092"
+    volumes:
+      - kaf3-data:/data
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus-kaf.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=24h"
+    ports:
+      - "9090:9090"
+    networks: [kaf-net]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks: [kaf-net]
+    depends_on: [prometheus]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  cadvisor:
+    # Pinned to v0.47.2 — last release with direct Docker API support.
+    # v0.49+ requires containerd socket discovery, which doesn't match
+    # OrbStack's layout, so the `name`/`image` labels were missing and
+    # the Grafana dashboard's {name=~"kaf.*"} filter matched nothing.
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8080:8080"
+    networks: [kaf-net]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: node_exporter
+    restart: unless-stopped
+    pid: host
+    volumes:
+      - "/:/host:ro,rslave"
+    command:
+      - "--path.rootfs=/host"
+    ports:
+      - "9200:9100"   # remap to 9200 so we don't clash with brokers' future /metrics ports
+    networks: [kaf-net]
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
+  loadgen:
+    build:
+      context: ./loadgen
+      dockerfile: ../Dockerfile.loadgen
+    image: loadgen:local
+    container_name: loadgen
+    profiles: ["bench"]   # don't start by default; invoke with `--profile bench up loadgen`
+    networks: [kaf-net]
+    depends_on: [kaf1, kaf2, kaf3]
+    ports:
+      - "8090:8090"
+    command:
+      - "-brokers=kaf1:9092,kaf2:9092,kaf3:9092"
+      - "-topic=loadtest"
+      - "-workers=8"
+      - "-record-size=1024"
+      - "-acks=-1"
+      - "-idempotent=true"
+      - "-duration=60s"
+      - "-warmup=10s"
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 512M }
+
+volumes:
+  kaf1-data:
+  kaf2-data:
+  kaf3-data:
+  prom-data:
+  grafana-data:
+
+networks:
+  kaf-net:
+    driver: bridge

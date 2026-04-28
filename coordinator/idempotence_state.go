@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/KhaiHust/kaf-go/constant"
+	"github.com/KhaiHust/kaf-go/metrics"
 )
 
 const (
@@ -42,6 +43,14 @@ func NewIdempotenceState() *IdempotenceState {
 }
 
 func (s *IdempotenceState) Validate(pid int64, epoch int16, firstSeq, lastSeq int32) (baseOff int64, alreadyCommitted bool, err error) {
+	defer func() {
+		if err != nil {
+			metrics.IdempotenceValidateErrors.WithLabelValues(
+				metrics.FormatErrorCode(constant.GetErrorId(err)),
+			).Inc()
+		}
+	}()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

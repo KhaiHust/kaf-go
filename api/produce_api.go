@@ -3,21 +3,26 @@ package api
 import (
 	"log/slog"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/KhaiHust/kaf-go/common"
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/coordinator"
+	"github.com/KhaiHust/kaf-go/metrics"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/producer"
 	"github.com/gofrs/uuid/v5"
 )
 
 type partitionResult struct {
-	index      int32
-	baseOffset int64
-	errorCode  int16
-	suppressed bool
+	index           int32
+	baseOffset      int64
+	errorCode       int16
+	suppressed      bool
+	recordsAppended int
+	bytesAppended   int
+	purgatoryWait   time.Duration // 0 unless this partition went through acks=-1 wait
 }
 type topicResult struct {
 	name       string
@@ -26,6 +31,7 @@ type topicResult struct {
 }
 
 func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *protocol.RequestHeader, r *protocol.Reader) error {
+	start := time.Now()
 	produceRequest := &producer.ProduceRequest{}
 	if err := produceRequest.Decode(r); err != nil {
 		slog.Error("HandleProduceApiKeys: Decode produceRequest error:", "error", err)
@@ -33,6 +39,7 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 	}
 
 	validAck := validateValidAcks(produceRequest.Acks)
+	acksLabel := strconv.FormatInt(int64(produceRequest.Acks), 10)
 
 	var topicResults []topicResult
 	pss := brokerContext.GetPartitionStateStore()
@@ -97,6 +104,10 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 					continue
 				}
 				if dup {
+					metrics.IdempotenceDup.WithLabelValues(
+						topicMeta.Name.String(),
+						metrics.FormatPartition(partition.Index),
+					).Inc()
 					pr.baseOffset = cachedBase
 					toResult.partitions = append(toResult.partitions, *pr)
 					continue
@@ -116,6 +127,8 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 				toResult.partitions = append(toResult.partitions, *pr)
 				continue
 			}
+			pr.recordsAppended = len(batch.Records)
+			pr.bytesAppended = len(partition.Records)
 
 			if pid >= 0 && ps.Idempotence != nil {
 				ps.Idempotence.Record(pid, epoch, firstSeq, lastSeq, baseOffset)
@@ -136,6 +149,7 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 					Deadline:       time.Now().Add(time.Duration(produceRequest.TimeoutMs) * time.Millisecond),
 					Done:           make(chan error, 1),
 				}
+				waitStart := time.Now()
 				ps.Purgatory.Add(w)
 				ps.Purgatory.CompleteUpTo(ps.GetHWM())
 				select {
@@ -148,13 +162,32 @@ func HandleProduceApiKeys(conn net.Conn, brokerContext IBrokerContext, header *p
 					pr.errorCode = constant.ErrRequestTimedOut
 					pr.baseOffset = baseOffset
 				}
-
+				pr.purgatoryWait = time.Since(waitStart)
 			}
 			toResult.partitions = append(toResult.partitions, *pr)
 		}
 		topicResults = append(topicResults, *toResult)
 	}
+
+	emitProduceMetrics(topicResults, acksLabel, time.Since(start))
 	return writeProduceApiResponse(conn, header, topicResults, produceRequest.Acks)
+}
+
+func emitProduceMetrics(results []topicResult, acksLabel string, requestLatency time.Duration) {
+	for _, tr := range results {
+		for _, pr := range tr.partitions {
+			errCode := metrics.FormatErrorCode(pr.errorCode)
+			metrics.ProduceRequests.WithLabelValues(acksLabel, tr.name, errCode).Inc()
+			metrics.ProduceLatency.WithLabelValues(acksLabel, tr.name).Observe(requestLatency.Seconds())
+			if pr.recordsAppended > 0 {
+				metrics.ProduceRecords.WithLabelValues(tr.name).Add(float64(pr.recordsAppended))
+				metrics.ProduceBytes.WithLabelValues(tr.name).Add(float64(pr.bytesAppended))
+			}
+			if pr.purgatoryWait > 0 {
+				metrics.PurgatoryWait.Observe(pr.purgatoryWait.Seconds())
+			}
+		}
+	}
 }
 
 func writeProduceApiResponse(conn net.Conn, header *protocol.RequestHeader, results []topicResult, acks int16) error {

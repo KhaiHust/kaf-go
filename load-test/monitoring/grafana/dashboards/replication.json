@@ -1,0 +1,104 @@
+{
+  "annotations": { "list": [] },
+  "description": "ISR membership, LEO/HWM gap, replica lag, ISR shrink/expand, min-ISR violations.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "ISR size per partition",
+      "id": 1,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["min", "mean", "max"] } },
+      "targets": [
+        {
+          "expr": "kaf_partition_isr_size{topic!=\"__cluster_metadata\"}",
+          "legendFormat": "{{topic}}/{{partition}} on {{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "LEO − HWM gap per partition (uncommitted)",
+      "id": 2,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "expr": "kaf_partition_leo{topic!=\"__cluster_metadata\"} - kaf_partition_hwm{topic!=\"__cluster_metadata\"}",
+          "legendFormat": "{{topic}}/{{partition}} on {{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Replica lag (offsets)",
+      "id": 3,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "expr": "kaf_partition_replica_lag_offsets{topic!=\"__cluster_metadata\"}",
+          "legendFormat": "{{topic}}/{{partition}} → r{{replica}} on {{instance}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "ISR shrink / expand events (5m increase)",
+      "id": 4,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "increase(kaf_isr_shrink_total[5m])",
+          "legendFormat": "shrink {{topic}}/{{partition}}",
+          "refId": "A"
+        },
+        {
+          "expr": "increase(kaf_isr_expand_total[5m])",
+          "legendFormat": "expand {{topic}}/{{partition}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Min-ISR violations (FailAll firings)",
+      "id": 5,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [
+        { "expr": "increase(kaf_purgatory_fail_all_total[5m])", "refId": "A" }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["kaf-go", "load-test", "broker"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "kaf-go — replication & ISR",
+  "uid": "kaf-replication",
+  "version": 1,
+  "weekStart": ""
+}

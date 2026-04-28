@@ -1,0 +1,183 @@
+{
+  "annotations": { "list": [] },
+  "description": "Per-container resource usage + loadgen client-side throughput/latency. Works today (cAdvisor + loadgen). Broker-side panels light up once kaf-go /metrics is wired.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "CPU usage per container",
+      "id": 1,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "expr": "rate(container_cpu_usage_seconds_total{name=~\"kaf.*|kafka.*|loadgen.*\"}[30s])",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory working set per container",
+      "id": 2,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "expr": "container_memory_working_set_bytes{name=~\"kaf.*|kafka.*|loadgen.*\"}",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Disk write throughput per container",
+      "id": 3,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "rate(container_fs_writes_bytes_total{name=~\"kaf.*|kafka.*\"}[30s])",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Network TX per container",
+      "id": 4,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "rate(container_network_transmit_bytes_total{name=~\"kaf.*|kafka.*|loadgen.*\"}[30s])",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Records produced (loadgen)",
+      "id": 10,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "loadgen_sent_records_total", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Throughput (msg/s)",
+      "id": 11,
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "targets": [
+        { "expr": "rate(loadgen_sent_records_total[30s])", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Throughput (MiB/s)",
+      "id": 12,
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "MiBs", "decimals": 2 }, "overrides": [] },
+      "targets": [
+        { "expr": "rate(loadgen_sent_bytes_total[30s]) / 1048576", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Failed records (rate/s)",
+      "id": 13,
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [
+        { "expr": "sum(rate(loadgen_failed_records_total[30s]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Client produce latency p50/p95/p99 (loadgen)",
+      "id": 20,
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(loadgen_produce_latency_seconds_bucket[30s])) by (le, acks))",
+          "legendFormat": "p50 (acks={{acks}})",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(loadgen_produce_latency_seconds_bucket[30s])) by (le, acks))",
+          "legendFormat": "p95 (acks={{acks}})",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(loadgen_produce_latency_seconds_bucket[30s])) by (le, acks))",
+          "legendFormat": "p99 (acks={{acks}})",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "In-flight records (loadgen)",
+      "id": 21,
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "loadgen_inflight_records", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Failed records by error class",
+      "id": 22,
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 29 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "rate(loadgen_failed_records_total[30s])",
+          "legendFormat": "{{error}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["kaf-go", "load-test"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "kaf-go load test — system & client",
+  "uid": "kaf-system",
+  "version": 1,
+  "weekStart": ""
+}

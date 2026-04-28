@@ -2,9 +2,30 @@ package coordinator
 
 import (
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/KhaiHust/kaf-go/metrics"
 )
+
+// publishStateGauges updates LEO/HWM/ISR-size gauges. Caller must hold ps.mu (read or write)
+// for the duration; the gauge values are point-in-time snapshots.
+func (ps *PartitionState) publishStateGaugesLocked() {
+	if ps.TopicName == "" {
+		return
+	}
+	partLabel := strconv.FormatInt(int64(ps.PartitionIndex), 10)
+	metrics.PartitionLEO.WithLabelValues(ps.TopicName, partLabel).Set(float64(ps.LEO))
+	metrics.PartitionHWM.WithLabelValues(ps.TopicName, partLabel).Set(float64(ps.HWM))
+	metrics.PartitionISRSize.WithLabelValues(ps.TopicName, partLabel).Set(float64(len(ps.ISR)))
+	for replica, leo := range ps.ReplicaLEO {
+		lag := ps.LEO - leo
+		metrics.PartitionReplicaLag.WithLabelValues(
+			ps.TopicName, partLabel, strconv.FormatInt(int64(replica), 10),
+		).Set(float64(lag))
+	}
+}
 
 type PartitionState struct {
 	TopicName      string
@@ -58,7 +79,7 @@ func (p *PartitionStateStore) SetLeader(topicName string, partition int32, broke
 			ps.Idempotence = NewIdempotenceState()
 		}
 	} else {
-		p.partitions[key] = &PartitionState{
+		ps := &PartitionState{
 			TopicName:      topicName,
 			PartitionIndex: partition,
 			LeaderBrokerID: brokerID,
@@ -70,6 +91,8 @@ func (p *PartitionStateStore) SetLeader(topicName string, partition int32, broke
 			Idempotence:    NewIdempotenceState(),
 			mu:             &sync.RWMutex{},
 		}
+		ps.Purgatory.SetLabels(topicName, partition)
+		p.partitions[key] = ps
 	}
 
 	return nil
@@ -81,7 +104,7 @@ func (p *PartitionStateStore) SetPartitionState(topicName string, partitionId, l
 	defer p.mu.Unlock()
 
 	key := fmt.Sprintf("%s-%d", topicName, partitionId)
-	p.partitions[key] = &PartitionState{
+	ps := &PartitionState{
 		TopicName:      topicName,
 		PartitionIndex: partitionId,
 		LeaderBrokerID: leader,
@@ -94,6 +117,8 @@ func (p *PartitionStateStore) SetPartitionState(topicName string, partitionId, l
 		Idempotence:    NewIdempotenceState(),
 		mu:             &sync.RWMutex{},
 	}
+	ps.Purgatory.SetLabels(topicName, partitionId)
+	p.partitions[key] = ps
 }
 
 func (p *PartitionStateStore) UpdateISR(topicName string, partition int32, newISR int32) {
@@ -125,7 +150,7 @@ func (p *PartitionStateStore) AssignReplicas(topicName string, numPartitions int
 		}
 
 		key := fmt.Sprintf("%s-%d", topicName, partition)
-		p.partitions[key] = &PartitionState{
+		ps := &PartitionState{
 			TopicName:      topicName,
 			PartitionIndex: partition,
 			LeaderBrokerID: replicas[0],
@@ -137,6 +162,8 @@ func (p *PartitionStateStore) AssignReplicas(topicName string, numPartitions int
 			Idempotence:    NewIdempotenceState(),
 			mu:             &sync.RWMutex{},
 		}
+		ps.Purgatory.SetLabels(topicName, partition)
+		p.partitions[key] = ps
 	}
 
 }
@@ -164,6 +191,7 @@ func (ps *PartitionState) RemoveFromISR(followerId int32) {
 		isrs = append(isrs, isr)
 	}
 	ps.ISR = isrs
+	ps.publishStateGaugesLocked()
 }
 
 func (ps *PartitionState) GetHWM() int64 {
@@ -218,6 +246,7 @@ func (ps *PartitionState) AddToISR(followerId int32) {
 	}
 	isrs = append(isrs, followerId)
 	ps.ISR = isrs
+	ps.publishStateGaugesLocked()
 }
 func (ps *PartitionState) UpdateReplicaLEO(follower int32, upto int64) {
 	ps.mu.Lock()
@@ -250,6 +279,7 @@ func (ps *PartitionState) AdvanceHWM() {
 	}
 	hwm := ps.HWM
 	purgatory := ps.Purgatory
+	ps.publishStateGaugesLocked()
 	ps.mu.Unlock()
 
 	if advanced && purgatory != nil {

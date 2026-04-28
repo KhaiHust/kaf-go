@@ -5,8 +5,10 @@ import (
 	"io"
 	"net"
 	"os"
+	"time"
 
 	"github.com/KhaiHust/kaf-go/constant"
+	"github.com/KhaiHust/kaf-go/metrics"
 	"github.com/KhaiHust/kaf-go/protocol"
 	"github.com/KhaiHust/kaf-go/protocol/fetch"
 	"github.com/KhaiHust/kaf-go/storage/commitlog"
@@ -28,18 +30,28 @@ func (s *ioSegment) size() int64 {
 }
 
 func HandleFetchApiKeys(conn net.Conn, brokerContext IBrokerContext, header *protocol.RequestHeader, r *protocol.Reader) error {
+	start := time.Now()
 	fetchRequest := fetch.FetchRequest{}
 	if err := fetchRequest.Decode(r); err != nil {
 		return err
 	}
+
+	role := "consumer"
+	if fetchRequest.ReplicaState != nil && fetchRequest.ReplicaState.ReplicaId > 0 {
+		role = "replica"
+	}
+	defer func() {
+		metrics.FetchLatency.WithLabelValues(role).Observe(time.Since(start).Seconds())
+	}()
 
 	type partResult struct {
 		pr     fetch.FetchPartitionResponse
 		region *commitlog.RecordsRegion
 	}
 	type topicResult struct {
-		topicId [16]byte
-		parts   []partResult
+		topicId  [16]byte
+		topicTag string
+		parts    []partResult
 	}
 
 	var topicResults []topicResult
@@ -49,7 +61,13 @@ func HandleFetchApiKeys(conn net.Conn, brokerContext IBrokerContext, header *pro
 	for _, t := range fetchRequest.Topics {
 		tr := topicResult{topicId: t.TopicId}
 		topicMeta, _ := brokerContext.GetTopicStore().GetTopic(t.TopicId)
+		if topicMeta != nil {
+			tr.topicTag = topicMeta.Name.String()
+		} else {
+			tr.topicTag = "unknown"
+		}
 		for _, part := range t.Partitions {
+			metrics.FetchRequests.WithLabelValues(tr.topicTag, role).Inc()
 			pr := fetch.FetchPartitionResponse{
 				PartitionIndex:       part.Partition,
 				PreferredReadReplica: -1,
@@ -100,6 +118,10 @@ func HandleFetchApiKeys(conn net.Conn, brokerContext IBrokerContext, header *pro
 			}
 			pr.HighWatermark = ps.HWM
 			pr.LastStableOffset = ps.HWM
+
+			if region != nil {
+				metrics.FetchBytes.WithLabelValues(tr.topicTag, role).Add(float64(region.Size))
+			}
 
 			tr.parts = append(tr.parts, partResult{pr, region})
 		}

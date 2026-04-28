@@ -6,6 +6,7 @@ import (
 
 	"github.com/KhaiHust/kaf-go/constant"
 	"github.com/KhaiHust/kaf-go/coordinator"
+	"github.com/KhaiHust/kaf-go/metrics"
 	metadatapkg "github.com/KhaiHust/kaf-go/protocol/metadata"
 )
 
@@ -61,6 +62,7 @@ func (isr *ISRManager) tick() {
 		changed := false
 		now := time.Now()
 
+		partLabel := metrics.FormatPartition(ps.PartitionIndex)
 		for _, f := range snap.ISR {
 			if f == snap.LeaderBrokerID {
 				continue
@@ -69,6 +71,7 @@ func (isr *ISRManager) tick() {
 			if !ok || now.Sub(last) > isr.lagMax {
 				ps.RemoveFromISR(f)
 				changed = true
+				metrics.ISRShrink.WithLabelValues(ps.TopicName, partLabel).Inc()
 				slog.Info("ISR shrink", "topic", ps.TopicName, "partition", ps.PartitionIndex, "removed", f)
 			}
 		}
@@ -80,6 +83,7 @@ func (isr *ISRManager) tick() {
 			if leo, ok := snap.ReplicaLEO[r]; ok && leo >= snap.HWM {
 				ps.AddToISR(r)
 				changed = true
+				metrics.ISRExpand.WithLabelValues(ps.TopicName, partLabel).Inc()
 				slog.Info("ISR expand", "topic", ps.TopicName, "partition", ps.PartitionIndex, "added", r)
 			}
 		}
